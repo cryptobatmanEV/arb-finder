@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Arb Scanner | The +EV Cave</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0a0d0f;
+      --surface: #0f1215;
+      --surface-2: #151a1e;
+      --green: #00dc6e;
+      --yellow: #f5c842;
+      --red: #f54262;
+      --border: rgba(255,255,255,0.07);
+      --border-2: rgba(255,255,255,0.13);
+      --text: #e8eaed;
+      --dim: rgba(232,234,237,0.45);
+      --dimmer: rgba(232,234,237,0.22);
+      --mono: 'IBM Plex Mono', monospace;
+      --sans: 'Syne', sans-serif;
+    }
+    html { font-size: 14px; }
+    body { background: var(--bg); color: var(--text); font-family: var(--mono); min-height: 100vh; }
+    #root { max-width: 1100px; margin: 0 auto; padding: 28px 16px 80px; }
+
+    /* ── Header ── */
+    .hdr { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 14px; margin-bottom: 22px; }
+    .hdr-title { font-family: var(--sans); font-size: 1.65rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; }
+    .hdr-title span { color: var(--green); }
+    .hdr-sub { font-size: 0.7rem; color: var(--dim); letter-spacing: 0.1em; text-transform: uppercase; margin-top: 5px; }
+    .hdr-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .timestamp { font-size: 0.7rem; color: var(--dim); text-align: right; }
+    .countdown { font-size: 0.68rem; color: var(--dimmer); }
+    .btn-refresh {
+      background: transparent; border: 1px solid var(--green); color: var(--green);
+      font-family: var(--mono); font-size: 0.75rem; padding: 7px 16px;
+      cursor: pointer; border-radius: 4px; letter-spacing: 0.06em; transition: all 0.15s;
+    }
+    .btn-refresh:hover:not(:disabled) { background: var(--green); color: #000; }
+    .btn-refresh:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    /* ── Platform row ── */
+    .platform-row {
+      display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;
+      padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    }
+    .plat-badge {
+      display: flex; align-items: center; gap: 7px; font-size: 0.7rem;
+      padding: 4px 11px; border-radius: 4px; background: var(--surface-2); border: 1px solid var(--border);
+      letter-spacing: 0.04em;
+    }
+    .plat-name { font-weight: 600; }
+    .plat-count { color: var(--dim); }
+    .plat-err { color: var(--red); font-size: 0.65rem; }
+    .plat-load { color: var(--yellow); font-size: 0.65rem; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .dot-ok { background: var(--green); }
+    .dot-err { background: var(--red); }
+    .dot-load { background: var(--yellow); animation: blink 1s ease infinite; }
+    .dot-idle { background: var(--dimmer); }
+    @keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0.25; } }
+
+    /* ── Error banners ── */
+    .err-banner {
+      background: rgba(245,66,98,0.06); border: 1px solid rgba(245,66,98,0.2);
+      border-radius: 6px; padding: 9px 14px; font-size: 0.7rem;
+      color: rgba(245,66,98,0.85); margin-bottom: 10px;
+    }
+
+    /* ── Stats bar ── */
+    .stats-bar {
+      display: flex; gap: 0; margin-bottom: 18px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+    }
+    .stat {
+      flex: 1; padding: 14px 18px; display: flex; flex-direction: column; gap: 3px;
+      border-right: 1px solid var(--border);
+    }
+    .stat:last-child { border-right: none; }
+    .stat-val { font-size: 1.25rem; font-weight: 600; font-family: var(--mono); }
+    .stat-lbl { font-size: 0.62rem; color: var(--dim); text-transform: uppercase; letter-spacing: 0.1em; }
+
+    /* ── Filters ── */
+    .filters { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
+    .fbtn {
+      background: var(--surface); border: 1px solid var(--border); color: var(--dim);
+      font-family: var(--mono); font-size: 0.7rem; padding: 5px 13px;
+      cursor: pointer; border-radius: 4px; letter-spacing: 0.05em; transition: all 0.15s;
+    }
+    .fbtn:hover { border-color: var(--border-2); color: var(--text); }
+    .fbtn.active { border-color: var(--green); color: var(--green); background: rgba(0,220,110,0.06); }
+    .near-toggle {
+      margin-left: auto; display: flex; align-items: center; gap: 8px;
+      font-size: 0.7rem; color: var(--dim); cursor: pointer; user-select: none;
+    }
+    .tswitch {
+      width: 32px; height: 18px; border-radius: 9px;
+      background: var(--surface-2); border: 1px solid var(--border-2); position: relative; transition: all 0.2s;
+      flex-shrink: 0;
+    }
+    .tswitch.on { background: rgba(0,220,110,0.15); border-color: var(--green); }
+    .tknob {
+      position: absolute; top: 2px; left: 2px; width: 12px; height: 12px;
+      border-radius: 50%; background: var(--dim); transition: all 0.2s;
+    }
+    .tswitch.on .tknob { left: 16px; background: var(--green); }
+
+    /* ── Section header ── */
+    .sec-hdr {
+      display: flex; align-items: center; gap: 10px;
+      font-family: var(--sans); font-size: 0.75rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.1em; color: var(--dim); margin-bottom: 12px;
+    }
+    .sec-hdr::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+    .sec-count { color: var(--green); font-family: var(--mono); font-size: 0.8rem; }
+
+    /* ── Arb cards ── */
+    .cards { display: flex; flex-direction: column; gap: 10px; }
+    .card {
+      background: var(--surface); border-radius: 10px; padding: 16px 18px;
+      border: 1px solid var(--border); border-left: 3px solid transparent; transition: transform 0.15s;
+    }
+    .card:hover { transform: translateX(3px); }
+    .card.strong { border-left-color: var(--green); }
+    .card.decent { border-left-color: var(--yellow); }
+    .card.thin   { border-left-color: rgba(255,255,255,0.22); }
+    .card.near   { border-left-color: rgba(255,255,255,0.1); }
+
+    .card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+    .card-tags { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .cat-tag {
+      font-size: 0.6rem; padding: 2px 7px; border-radius: 3px;
+      text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700;
+      background: var(--surface-2); border: 1px solid var(--border-2); color: var(--dim);
+    }
+    .roi-tag {
+      font-size: 0.62rem; padding: 2px 7px; border-radius: 3px;
+      background: rgba(0,220,110,0.08); border: 1px solid rgba(0,220,110,0.18); color: var(--green);
+    }
+    .margin-grp { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+    .margin-val { font-size: 1.05rem; font-weight: 700; font-family: var(--mono); }
+    .mv-strong { color: var(--green); }
+    .mv-decent { color: var(--yellow); }
+    .mv-thin   { color: rgba(255,255,255,0.55); }
+    .mv-near   { color: var(--dim); }
+    .near-lbl  { font-size: 0.6rem; color: var(--dimmer); text-transform: uppercase; letter-spacing: 0.08em; }
+
+    .card-title {
+      font-family: var(--sans); font-size: 0.9rem; font-weight: 600;
+      margin-bottom: 12px; line-height: 1.35; color: var(--text);
+    }
+
+    .legs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+    .leg {
+      background: var(--surface-2); border-radius: 7px; padding: 11px 13px;
+      border: 1px solid var(--border); display: flex; flex-direction: column; gap: 3px;
+    }
+    .leg-plat  { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; }
+    .leg-out   { font-size: 0.7rem; color: var(--dim); }
+    .leg-price { font-size: 1.05rem; font-weight: 600; font-family: var(--mono); }
+    .leg-stake { font-size: 0.7rem; color: var(--dim); }
+
+    .pm-c  { color: #818cf8; }
+    .ka-c  { color: #22d3ee; }
+    .px-c  { color: #c084fc; }
+    .nv-c  { color: #4ade80; }
+
+    /* OddsJam-style legs */
+    .oj-legs { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: center; margin-bottom: 14px; }
+    .oj-vs { font-size: 0.65rem; color: var(--dimmer); font-weight: 700; text-align: center; }
+    .oj-leg {
+      background: var(--surface-2); border-radius: 8px; padding: 12px 14px;
+      border: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px;
+    }
+    .oj-plat { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; margin-bottom: 2px; }
+    .oj-outcome { font-size: 0.72rem; color: var(--dim); }
+    .oj-outcome strong { color: var(--text); }
+    .oj-odds { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 2px; }
+    .oj-american { font-size: 1.2rem; font-weight: 700; font-family: var(--mono); color: var(--text); }
+    .oj-cents { font-size: 0.7rem; color: var(--dim); }
+    .oj-stake-line { font-size: 0.72rem; }
+    .oj-stake-val { font-weight: 600; color: var(--green); }
+    .oj-stake-lbl { color: var(--dim); }
+
+    /* Calculator */
+    .oj-calc {
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+      padding: 12px 0 2px; border-top: 1px solid var(--border);
+    }
+    .oj-calc-left { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .oj-calc-lbl { font-size: 0.68rem; color: var(--dim); white-space: nowrap; }
+    .oj-calc-right { text-align: right; }
+    .oj-profit-val { font-size: 1.3rem; font-weight: 700; color: var(--green); font-family: var(--mono); }
+    .oj-profit-lbl { font-size: 0.65rem; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; }
+    .oj-return-lbl { font-size: 0.65rem; color: var(--dimmer); margin-top: 3px; }
+    .oj-not-yet { font-size: 0.72rem; color: var(--dim); }
+    .oj-pills { display: flex; gap: 5px; flex-wrap: wrap; }
+
+    /* ── Near-arb collapsible ── */
+    .near-section { margin-top: 24px; }
+    .near-hdr-btn {
+      display: flex; align-items: center; gap: 8px; cursor: pointer;
+      font-size: 0.7rem; color: var(--dim); padding: 8px 0;
+      user-select: none; transition: color 0.15s; background: none; border: none; font-family: var(--mono);
+    }
+    .near-hdr-btn:hover { color: var(--text); }
+    .chev { font-size: 0.62rem; transition: transform 0.2s; display: inline-block; }
+    .chev.open { transform: rotate(90deg); }
+
+    /* ── Empty ── */
+    .empty { text-align: center; padding: 52px 20px; color: var(--dim); font-size: 0.78rem; line-height: 2; }
+    .empty-icon { font-size: 2.2rem; margin-bottom: 10px; }
+
+    /* ── Skeleton ── */
+    .skel {
+      background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 50%, var(--surface) 75%);
+      background-size: 200% 100%; animation: shim 1.6s infinite; border-radius: 10px;
+    }
+    @keyframes shim { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+    .skel-card { height: 148px; margin-bottom: 10px; }
+
+    .stake-input-row {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      padding: 10px 0 4px; border-top: 1px solid var(--border); margin-top: 4px;
+    }
+    .stake-lbl { font-size: 0.68rem; color: var(--dim); white-space: nowrap; }
+    .stake-input-wrap {
+      display: flex; align-items: center; gap: 4px;
+      background: var(--surface-2); border: 1px solid var(--green);
+      border-radius: 5px; padding: 4px 10px;
+    }
+    .stake-dollar { color: var(--green); font-size: 0.8rem; }
+    .stake-input {
+      background: transparent; border: none; outline: none;
+      color: var(--text); font-family: var(--mono); font-size: 0.85rem;
+      width: 80px;
+    }
+    .stake-input::placeholder { color: var(--dimmer); }
+    .stake-pill {
+      background: var(--surface-2); border: 1px solid var(--border-2);
+      color: var(--dim); font-family: var(--mono); font-size: 0.68rem;
+      padding: 4px 9px; border-radius: 4px; cursor: pointer; transition: all 0.15s;
+    }
+    .stake-pill:hover { border-color: var(--green); color: var(--green); }
+
+    @media (max-width: 600px) {
+      .legs { grid-template-columns: 1fr; }
+      .hdr { flex-direction: column; }
+      .near-toggle { margin-left: 0; }
+      .stats-bar { flex-wrap: wrap; }
+      .stat { min-width: 100px; }
+    }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+
+// ─── CONFIG ──────────────────────────────────────────────────────────────────
+const REFRESH_SECS   = 60;
+const BASE_STAKE     = 100;
+const MATCH_MIN_SIM  = 0.18;   // Jaccard threshold for market matching
+const NEAR_ARB_BAND  = 0.02;   // 2% band below zero margin = near-arb
+const MAX_MARKETS    = 9999;    // per platform
+
+const FILTERS   = ['all','mlb','nba','nfl','politics','crypto','other'];
+const FILTER_LB = { all:'All',mlb:'MLB',nba:'NBA',nfl:'NFL',politics:'Politics',crypto:'Crypto',other:'Other' };
+const PLAT_LB   = { polymarket:'Polymarket', kalshi:'Kalshi', novig:'Novig' };
+const PLAT_CLS  = { polymarket:'pm-c', kalshi:'ka-c', novig:'nv-c' };
+
+// ─── STOP WORDS ──────────────────────────────────────────────────────────────
+const STOPS = new Set(['the','a','an','is','will','be','in','of','to','and','or','by','at','on','for','with','this','that','from','than','more','over','under','not','no','has','have','had','was','were','are','does','did','do','if','when','who','which','what','how','per','its','it','he','she','they','we','you','i','as','but','so','yet','nor','any','all','each','vs','v','vs.','get','hit','least','most','total']);
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+const fmt    = (n, d=2) => (+n).toFixed(d);
+const fmtPct = n => fmt(n,2) + '%';
+const fmtUSD = n => '$' + fmt(n,2);
+
+function tokenize(text) {
+  if (!text) return new Set();
+  return new Set(
+    text.toLowerCase()
+        .replace(/[^\w\s]/g,' ')
+        .split(/\s+/)
+        .filter(w => w.length > 2 && !STOPS.has(w))
+  );
+}
+
+function jaccard(a, b) {
+  if (!a.size || !b.size) return 0;
+  const inter = [...a].filter(x => b.has(x)).length;
+  return inter / new Set([...a,...b]).size;
+}
+
+function categorize(text) {
+  if (!text) return 'other';
+  const t = text.toLowerCase();
+  const MLB = ['yankees','red sox','dodgers','cubs','mets','giants','padres','phillies','braves','cardinals','astros','rangers','mariners','brewers','twins','tigers','guardians','royals','white sox','athletics','angels','orioles','rays','blue jays','nationals','marlins','rockies','diamondbacks','pirates','reds'];
+  const NBA = ['lakers','celtics','warriors','bucks','nets','heat','knicks','spurs','clippers','suns','nuggets','jazz','thunder','blazers','grizzlies','pelicans','hawks','hornets','magic','wizards','pistons','cavaliers','pacers','bulls','raptors','sixers','76ers'];
+  const NFL = ['chiefs','eagles','cowboys','packers','patriots','bills','ravens','49ers','niners','steelers','seahawks','rams','broncos','chargers','raiders','bears','vikings','lions','falcons','saints','buccaneers','panthers','commanders','giants','jets','bengals','browns','texans','jaguars','titans','colts','dolphins'];
+  if (MLB.some(s => t.includes(s)) || /\b(baseball|home run|strikeout|pitcher|batting|mlb|nrfi|rbi|innings)\b/.test(t)) return 'mlb';
+  if (NBA.some(s => t.includes(s)) || /\b(basketball|nba|wnba|points|rebounds|assists|three.pointer)\b/.test(t)) return 'nba';
+  if (NFL.some(s => t.includes(s)) || /\b(football|nfl|touchdown|quarterback|passing yards|rushing|super bowl)\b/.test(t)) return 'nfl';
+  if (/\b(election|president|senate|congress|governor|vote|trump|biden|harris|republican|democrat|primary)\b/.test(t)) return 'politics';
+  if (/\b(bitcoin|btc|ethereum|eth|crypto|solana|bnb|coin|blockchain|defi|web3)\b/.test(t)) return 'crypto';
+  return 'other';
+}
+
+function americanToProb(odds) {
+  const n = +odds;
+  return n > 0 ? 100 / (n + 100) : Math.abs(n) / (Math.abs(n) + 100);
+}
+
+// ─── NORMALIZERS ─────────────────────────────────────────────────────────────
+function normPolymarket(raw) {
+  // Gamma API returns an array directly, CLOB returns { data: [...] }
+  const data = Array.isArray(raw) ? raw : (raw.data || raw.markets || []);
+  const now = Date.now();
+  const cutoff48h = now + 48 * 60 * 60 * 1000;
+  return data
+    .filter(m => {
+      if (m.active === false || m.closed || m.archived) return false;
+      // Only include markets closing within 48 hours
+      const end = m.endDateIso || m.endDate;
+      if (!end) return true; // include if no date
+      const endMs = new Date(end).getTime();
+      return endMs <= cutoff48h && endMs > now;
+    })
+    .slice(0, MAX_MARKETS)
+    .map(m => {
+      // Gamma API: outcomePrices is ["0.72", "0.28"], outcomes is ["Yes","No"]
+      let yP, nP;
+      if (m.outcomePrices) {
+        const prices = Array.isArray(m.outcomePrices)
+          ? m.outcomePrices
+          : JSON.parse(m.outcomePrices || '[]');
+        yP = parseFloat(prices[0]);
+        nP = parseFloat(prices[1]);
+      } else if (m.tokens?.length >= 2) {
+        const yes = m.tokens.find(t => t.outcome === 'Yes') || m.tokens[0];
+        const no  = m.tokens.find(t => t.outcome === 'No')  || m.tokens[1];
+        yP = parseFloat(yes?.price || 0);
+        nP = parseFloat(no?.price  || 0);
+      }
+      if (!yP || yP < 0.01 || yP > 0.99) return null;
+      return {
+        id: 'pm_' + (m.id || m.condition_id || Math.random()),
+        platform: 'polymarket',
+        title: m.question || m.title || m.description || '',
+        category: categorize(m.question || m.title || (m.tags||[]).join(' ')),
+        yesPrice: yP, noPrice: nP || (1 - yP),
+        url: m.slug ? `https://polymarket.com/event/${m.slug}` : 'https://polymarket.com',
+        volume: parseFloat(m.volume || 0),
+      };
+    }).filter(Boolean);
+}
+
+function normKalshi(raw) {
+  const data = raw.markets || raw.data || [];
+  const now = Date.now();
+  const cutoff48h = now + 48 * 60 * 60 * 1000;
+  return data
+    .filter(m => {
+      if (m.mve_collection_ticker) return false;
+      if (m.market_type && m.market_type !== 'binary') return false;
+      if (m.status !== 'active' && m.status !== 'open') return false;
+      // Use expected_expiration_time (actual game end), NOT close_time (legal deadline weeks away)
+      const end = m.expected_expiration_time || m.expiration_time;
+      if (!end) return true;
+      const endMs = new Date(end).getTime();
+      return endMs <= cutoff48h && endMs > now;
+    })
+    .slice(0, MAX_MARKETS)
+    .map(m => {
+      // Price priority: mid of bid/ask → ask → bid → last_price
+      const yAsk  = parseFloat(m.yes_ask_dollars) || 0;
+      const yBid  = parseFloat(m.yes_bid_dollars) || 0;
+      const nAsk  = parseFloat(m.no_ask_dollars)  || 0;
+      const nBid  = parseFloat(m.no_bid_dollars)  || 0;
+      const yLast = parseFloat(m.last_price_dollars) || 0;
+
+      let yP = yAsk > 0 && yBid > 0 ? (yAsk + yBid) / 2
+             : yAsk > 0 ? yAsk
+             : yBid > 0 ? yBid
+             : yLast > 0 ? yLast
+             : 0;
+
+      let nP = nAsk > 0 && nBid > 0 ? (nAsk + nBid) / 2
+             : nAsk > 0 ? nAsk
+             : nBid > 0 ? nBid
+             : yP > 0 ? 1 - yP
+             : 0;
+
+      if (yP < 0.02 || yP > 0.98) return null;
+
+      return {
+        id: 'ka_' + m.ticker,
+        platform: 'kalshi',
+        title: m.title || m.ticker || '',
+        category: categorize(m.title || m.event_ticker || ''),
+        yesPrice: yP,
+        noPrice: nP || 1 - yP,
+        url: `https://kalshi.com/markets/${m.ticker}`,
+        volume: parseFloat(m.volume_fp || 0),
+      };
+    }).filter(Boolean);
+}
+
+function normProphets(raw) {
+  const data = raw.markets || raw.data || raw.results || (Array.isArray(raw) ? raw : []);
+  return data
+    .filter(m => m.status === 'active' || m.active || m.open)
+    .slice(0, MAX_MARKETS)
+    .map(m => {
+      let yP = m.yes_price != null ? m.yes_price / 100
+             : m.yesPrice  != null ? m.yesPrice
+             : m.probability != null ? m.probability / 100
+             : null;
+      if (yP == null || yP < 0.01 || yP > 0.99) return null;
+      return {
+        id: 'px_' + (m.id || m.slug || Math.random()),
+        platform: 'prophets',
+        title: m.title || m.question || m.name || '',
+        category: categorize(m.title || m.sport || m.category || ''),
+        yesPrice: yP, noPrice: m.no_price != null ? m.no_price / 100 : 1 - yP,
+        url: m.slug ? `https://prophets.com/markets/${m.slug}` : 'https://prophets.com',
+        volume: m.volume || 0,
+      };
+    }).filter(Boolean);
+}
+
+function normNovig(raw) {
+  // Novig EMM response: array of market objects or { markets: [...] }
+  const events = Array.isArray(raw) ? raw : (raw.markets || raw.data || raw.events || []);
+  const out = [];
+  events.slice(0, MAX_MARKETS).forEach(ev => {
+    // Each event has lines/outcomes with yes/no prices or American odds
+    const lines = ev.lines || ev.markets || ev.outcomes || [ev];
+    lines.forEach(m => {
+      let yP, nP;
+      // American odds format
+      if (m.yes_odds != null) {
+        yP = americanToProb(m.yes_odds);
+        nP = m.no_odds != null ? americanToProb(m.no_odds) : 1 - yP;
+      } else if (m.odds != null && m.side != null) {
+        yP = m.side === 'yes' ? americanToProb(m.odds) : 1 - americanToProb(m.odds);
+        nP = 1 - yP;
+      } else if (m.yes_price != null) {
+        yP = m.yes_price / 100;
+        nP = m.no_price != null ? m.no_price / 100 : 1 - yP;
+      } else if (m.probability != null) {
+        yP = m.probability;
+        nP = 1 - yP;
+      }
+      if (yP == null || yP < 0.01 || yP > 0.99) return;
+      const title = m.name || m.title || ev.name || ev.title || ev.event_name || '';
+      out.push({
+        id: 'nv_' + (m.id || m.line_id || ev.id || Math.random()),
+        platform: 'novig',
+        title,
+        category: categorize(title + ' ' + (ev.sport || ev.league || '')),
+        yesPrice: yP, noPrice: nP,
+        url: 'https://novig.com',
+        volume: m.volume || ev.volume || 0,
+      });
+    });
+  });
+  return out;
+}
+
+// ─── ARB ENGINE ──────────────────────────────────────────────────────────────
+function matchAndArb(allMkts) {
+  const platforms = Object.keys(allMkts).filter(p => allMkts[p].length > 0);
+  const arbs = [], near = [];
+  const seen = new Set();
+
+  // Pre-compute tokens
+  const tokenCache = {};
+  platforms.forEach(p => {
+    tokenCache[p] = allMkts[p].map(m => ({ m, toks: tokenize(m.title) }));
+  });
+
+  for (let i = 0; i < platforms.length; i++) {
+    for (let j = i + 1; j < platforms.length; j++) {
+      const pA = platforms[i], pB = platforms[j];
+      tokenCache[pA].forEach(({ m: mA, toks: tA }) => {
+        let bestSim = 0, bestB = null;
+        tokenCache[pB].forEach(({ m: mB, toks: tB }) => {
+          const s = jaccard(tA, tB);
+          if (s > bestSim) { bestSim = s; bestB = mB; }
+        });
+        if (bestSim < MATCH_MIN_SIM || !bestB) return;
+        const key = [mA.id, bestB.id].sort().join('|');
+        if (seen.has(key)) return;
+        seen.add(key);
+        const opp = calcArb(mA, bestB, bestSim);
+        if (!opp) return;
+        if (opp.isArb) arbs.push(opp);
+        else if (opp.isNear) near.push(opp);
+      });
+    }
+  }
+
+  arbs.sort((a,b) => b.margin - a.margin);
+  near.sort((a,b) => b.margin - a.margin);
+  return { arbs, near, pairsChecked: seen.size };
+}
+
+function calcArb(mA, mB, similarity) {
+  // Two combos: YES-A / NO-B and NO-A / YES-B
+  const combos = [
+    { oA:'YES', oB:'NO',  pA: mA.yesPrice, pB: mB.noPrice  },
+    { oA:'NO',  oB:'YES', pA: mA.noPrice,  pB: mB.yesPrice },
+  ];
+  let best = null;
+  combos.forEach(c => {
+    if (!c.pA || !c.pB || c.pA <= 0 || c.pB <= 0) return;
+    const sum = c.pA + c.pB;
+    if (!best || sum < best.sum) best = { ...c, sum };
+  });
+  if (!best) return null;
+
+  // SANITY CHECK: if implied sum < 0.70, these are almost certainly
+  // different markets incorrectly matched (e.g. 2.6¢ + 3.5¢ = 6.1¢ = fake)
+  // Real same-event markets must together account for most of the probability
+  if (best.sum < 0.70) return null;
+
+  // Also require each leg to be at least 5¢ — sub-5¢ markets have no liquidity
+  if (best.pA < 0.05 || best.pB < 0.05) return null;
+
+  const margin   = (1 - best.sum) * 100;
+  const isArb    = margin > 0;
+  const isNear   = !isArb && margin > -NEAR_ARB_BAND * 100;
+  if (!isArb && !isNear) return null;
+
+  const { pA, pB } = best;
+  const denom     = pA + pB;
+  const stakeA    = BASE_STAKE * pA / denom;
+  const stakeB    = BASE_STAKE * pB / denom;
+  const profit    = isArb ? BASE_STAKE * (1 / denom - 1) : 0;
+  const roi       = isArb ? (1 / denom - 1) * 100 : 0;
+  const title     = mA.title.length <= mB.title.length ? mA.title : mB.title;
+
+  return {
+    id: mA.id + '||' + mB.id,
+    title,
+    category: mA.category !== 'other' ? mA.category : mB.category,
+    legA: { platform: mA.platform, outcome: best.oA, price: pA, stake: stakeA, label: mA.title },
+    legB: { platform: mB.platform, outcome: best.oB, price: pB, stake: stakeB, label: mB.title },
+    impliedSum: best.sum * 100,
+    margin, profit, roi, similarity, isArb, isNear,
+  };
+}
+
+// ─── FETCHERS ─────────────────────────────────────────────────────────────────
+async function fetchPlatform(url, normalizer) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = await res.json();
+  if (json.error) throw new Error(json.error);
+  return normalizer(json);
+}
+
+const FETCHERS = {
+  polymarket: () => fetchPlatform('/api/polymarket', normPolymarket),
+  kalshi:     () => fetchPlatform('/api/kalshi', normKalshi),
+  novig:      () => fetchPlatform('/api/novig',  normNovig),
+};
+
+
+
+
+
+
+
+// ─── COMPONENTS ───────────────────────────────────────────────────────────────
+function PlatBadge({ name, status, count }) {
+  const dot = status === 'ok' ? 'dot-ok' : status === 'error' ? 'dot-err' : status === 'loading' ? 'dot-load' : 'dot-idle';
+  return (
+    <div className="plat-badge">
+      <div className={`dot ${dot}`} />
+      <span className="plat-name">{PLAT_LB[name]}</span>
+      {status === 'ok'      && <span className="plat-count">{count} mkts</span>}
+      {status === 'error'   && <span className="plat-err">error</span>}
+      {status === 'loading' && <span className="plat-load">loading…</span>}
+      {status === 'idle'    && <span style={{color:'var(--dimmer)',fontSize:'0.65rem'}}>—</span>}
+    </div>
+  );
+}
+
+function MarginVal({ margin, isNear }) {
+  const cls = isNear ? 'mv-near' : margin > 3 ? 'mv-strong' : margin > 1 ? 'mv-decent' : 'mv-thin';
+  return <span className={`margin-val ${cls}`}>{fmtPct(margin)}</span>;
+}
+
+function probToAmerican(p) {
+  if (p <= 0 || p >= 1) return 'N/A';
+  if (p >= 0.5) return '-' + Math.round(p / (1 - p) * 100);
+  return '+' + Math.round((1 - p) / p * 100);
+}
+
+function ArbCard({ opp }) {
+  const { legA, legB, margin, roi, category, title, isNear, impliedSum } = opp;
+  const [totalStake, setTotalStake] = React.useState('100');
+
+  const ts     = Math.max(parseFloat(totalStake) || 100, 1);
+  const denom  = legA.price + legB.price;
+  const stakeA = ts * legA.price / denom;
+  const stakeB = ts * legB.price / denom;
+  const profit = isNear ? 0 : ts * (1 / denom - 1);
+  const returnA = stakeA / legA.price;
+  const returnB = stakeB / legB.price;
+
+  const cls = isNear ? 'card near' : margin > 3 ? 'card strong' : margin > 1 ? 'card decent' : 'card thin';
+
+  return (
+    <div className={cls}>
+      <div className="card-top">
+        <div className="card-tags">
+          <span className="cat-tag">{category.toUpperCase()}</span>
+          {!isNear && <span className="roi-tag">ROI {fmtPct(roi)}</span>}
+        </div>
+        <div className="margin-grp">
+          <MarginVal margin={margin} isNear={isNear} />
+          {isNear && <span className="near-lbl">near arb</span>}
+        </div>
+      </div>
+
+      <div className="card-title">{title}</div>
+
+      {/* OddsJam-style legs */}
+      <div className="oj-legs">
+        <OJLeg leg={legA} stake={stakeA} ret={returnA} />
+        <div className="oj-vs">VS</div>
+        <OJLeg leg={legB} stake={stakeB} ret={returnB} />
+      </div>
+
+      {/* Calculator row */}
+      <div className="oj-calc" onClick={e => e.stopPropagation()}>
+        <div className="oj-calc-left">
+          <span className="oj-calc-lbl">Total stake</span>
+          <div className="stake-input-wrap">
+            <span className="stake-dollar">$</span>
+            <input
+              className="stake-input"
+              type="number"
+              min="1"
+              value={totalStake}
+              onChange={e => setTotalStake(e.target.value)}
+            />
+          </div>
+          <div className="oj-pills">
+            {[50,100,250,500,1000].map(v => (
+              <button key={v} className="stake-pill" onClick={() => setTotalStake(String(v))}>${v}</button>
+            ))}
+          </div>
+        </div>
+        <div className="oj-calc-right">
+          {isNear ? (
+            <div className="oj-not-yet">Not yet profitable</div>
+          ) : (
+            <>
+              <div className="oj-profit-val">+{fmtUSD(profit)}</div>
+              <div className="oj-profit-lbl">guaranteed profit</div>
+              <div className="oj-return-lbl">
+                {fmtUSD(stakeA)} → {fmtUSD(returnA)} &nbsp;|&nbsp; {fmtUSD(stakeB)} → {fmtUSD(returnB)}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OJLeg({ leg, stake, ret }) {
+  const cls  = PLAT_CLS[leg.platform] || '';
+  const amer = probToAmerican(leg.price);
+  const implPct = fmt(leg.price * 100, 1);
+  return (
+    <div className="oj-leg">
+      <div className={`oj-plat ${cls}`}>{PLAT_LB[leg.platform]}</div>
+      <div className="oj-outcome">Bet <strong>{leg.outcome}</strong></div>
+      <div className="oj-odds">
+        <span className="oj-american">{amer}</span>
+        <span className="oj-cents">{implPct}¢</span>
+      </div>
+      <div className="oj-stake-line">
+        <span className="oj-stake-val">{fmtUSD(stake)}</span>
+        <span className="oj-stake-lbl"> to win {fmtUSD(ret)}</span>
+      </div>
+    </div>
+  );
+}
+
+function SkeletonCards() {
+  return <div className="cards">{[1,2,3].map(i=><div key={i} className="skel skel-card"/>)}</div>;
+}
+
+// ─── APP ──────────────────────────────────────────────────────────────────────
+function App() {
+  const EMPTY_MKTS = { polymarket:[], kalshi:[], novig:[] };
+  const EMPTY_STAT = { polymarket:'idle', kalshi:'idle', novig:'idle' };
+
+  const [markets,  setMarkets]  = useState(EMPTY_MKTS);
+  const [status,   setStatus]   = useState(EMPTY_STAT);
+  const [errors,   setErrors]   = useState({});
+  const [arbs,     setArbs]     = useState([]);
+  const [near,     setNear]     = useState([]);
+  const [loading,  setLoading]  = useState(false);
+  const [lastUp,   setLastUp]   = useState(null);
+  const [countdown,setCdown]    = useState(REFRESH_SECS);
+  const [filter,   setFilter]   = useState('all');
+  const [showNear, setShowNear] = useState(true);
+  const [nearOpen, setNearOpen] = useState(true);
+  const [firstLoad,setFirst]    = useState(true);
+  const [pairs,    setPairs]    = useState(0);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setStatus({ polymarket:'loading', kalshi:'loading', prophets:'loading', novig:'loading' });
+
+    const mkts = { ...EMPTY_MKTS };
+    const stat = { ...EMPTY_STAT };
+    const errs = {};
+
+    await Promise.all(
+      Object.entries(FETCHERS).map(async ([p, fn]) => {
+        try {
+          mkts[p] = await fn();
+          stat[p] = 'ok';
+        } catch (e) {
+          stat[p] = 'error';
+          errs[p] = e.message;
+        }
+      })
+    );
+
+    setMarkets(mkts);
+    setStatus(stat);
+    setErrors(errs);
+
+    const { arbs: a, near: n, pairsChecked: p } = matchAndArb(mkts);
+    setArbs(a);
+    setNear(n);
+    setPairs(p);
+    setLastUp(new Date());
+    setLoading(false);
+    setFirst(false);
+    setCdown(REFRESH_SECS);
+  }, []);
+
+  // Boot fetch
+  useEffect(() => { refresh(); }, []);
+
+  // Countdown + auto-refresh
+  useEffect(() => {
+    const id = setInterval(() => {
+      setCdown(c => {
+        if (c <= 1) { refresh(); return REFRESH_SECS; }
+        return c - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  }, [refresh]);
+
+  const fArbs = filter === 'all' ? arbs : arbs.filter(a => a.category === filter);
+  const fNear = filter === 'all' ? near : near.filter(a => a.category === filter);
+  const totalMkts = Object.values(markets).reduce((s, m) => s + m.length, 0);
+  const bestMargin = arbs.length > 0 ? arbs[0].margin : null;
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="hdr">
+        <div>
+          <div className="hdr-title">LIVE ARB <span>SCANNER</span></div>
+          <div className="hdr-sub">The +EV Cave · Prediction Market Arbitrage</div>
+        </div>
+        <div className="hdr-right">
+          {lastUp && (
+            <div style={{textAlign:'right'}}>
+              <div className="timestamp">Updated {lastUp.toLocaleTimeString()}</div>
+              <div className="countdown">next refresh in {countdown}s</div>
+            </div>
+          )}
+          <button className="btn-refresh" onClick={refresh} disabled={loading}>
+            {loading ? '↻ Refreshing…' : '↻ Refresh'}
+          </button>
+        </div>
+      </div>
+
+      {/* Platform status */}
+      <div className="platform-row">
+        {Object.entries(status).map(([p, s]) => (
+          <PlatBadge key={p} name={p} status={s} count={markets[p]?.length || 0} />
+        ))}
+      </div>
+
+      {/* Error banners */}
+      {Object.entries(errors).map(([p, msg]) => (
+        <div key={p} className="err-banner">
+          <strong>{PLAT_LB[p]}:</strong> {msg}
+          {(p === 'prophets' || p === 'novig') && ' — verify endpoint in /api/' + p + '.js (see inline comments)'}
+        </div>
+      ))}
+
+      {/* Stats */}
+      {!firstLoad && (
+        <div className="stats-bar">
+          <div className="stat">
+            <div className="stat-val" style={{color: arbs.length > 0 ? 'var(--green)' : 'var(--dim)'}}>
+              {arbs.length}
+            </div>
+            <div className="stat-lbl">Live Arbs</div>
+          </div>
+          <div className="stat">
+            <div className="stat-val" style={{color: near.length > 0 ? 'var(--yellow)' : 'var(--dim)'}}>
+              {near.length}
+            </div>
+            <div className="stat-lbl">Near-Arbs</div>
+          </div>
+          <div className="stat">
+            <div className="stat-val" style={{color: bestMargin > 0 ? 'var(--green)' : 'var(--dim)'}}>
+              {bestMargin != null ? fmtPct(bestMargin) : '—'}
+            </div>
+            <div className="stat-lbl">Best Margin</div>
+          </div>
+          <div className="stat">
+            <div className="stat-val">{totalMkts.toLocaleString()}</div>
+            <div className="stat-lbl">Markets Scanned</div>
+          </div>
+          <div className="stat">
+            <div className="stat-val">{pairs.toLocaleString()}</div>
+            <div className="stat-lbl">Pairs Checked</div>
+          </div>
+        </div>
+      )}
+
+      {/* Filters */}
+      <div className="filters">
+        {FILTERS.map(f => (
+          <button key={f} className={`fbtn${filter===f?' active':''}`} onClick={() => setFilter(f)}>
+            {FILTER_LB[f]}
+          </button>
+        ))}
+        <div className="near-toggle" onClick={() => setShowNear(!showNear)}>
+          <div className={`tswitch${showNear?' on':''}`}><div className="tknob"/></div>
+          Show near-arbs
+        </div>
+      </div>
+
+      {/* Content */}
+      {firstLoad && loading ? (
+        <SkeletonCards />
+      ) : (
+        <>
+          <div className="sec-hdr">
+            Live Arbitrage Opportunities
+            {fArbs.length > 0 && <span className="sec-count">{fArbs.length}</span>}
+          </div>
+
+          {fArbs.length > 0 ? (
+            <div className="cards">
+              {fArbs.map(o => <ArbCard key={o.id} opp={o} />)}
+            </div>
+          ) : (
+            <div className="empty">
+              <div className="empty-icon">◎</div>
+              <div>No arbitrage opportunities{filter !== 'all' ? ` in ${FILTER_LB[filter]}` : ''} right now.</div>
+              <div style={{marginTop:6,fontSize:'0.7rem',color:'var(--dimmer)'}}>
+                Markets refresh every {REFRESH_SECS}s · enable near-arbs below to watch converging markets.
+              </div>
+            </div>
+          )}
+
+          {/* Near-arb section */}
+          {showNear && (
+            <div className="near-section">
+              <button className="near-hdr-btn" onClick={() => setNearOpen(!nearOpen)}>
+                <span className={`chev${nearOpen?' open':''}`}>▶</span>
+                Near-arbs ({fNear.length}) — within 2% of profitable
+              </button>
+              {nearOpen && fNear.length > 0 && (
+                <div className="cards">{fNear.map(o => <ArbCard key={o.id} opp={o} />)}</div>
+              )}
+              {nearOpen && fNear.length === 0 && (
+                <div className="empty" style={{padding:'24px 0'}}>
+                  <div style={{fontSize:'0.72rem',color:'var(--dimmer)'}}>No near-arbs found in current scan.</div>
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── MOUNT ────────────────────────────────────────────────────────────────────
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
