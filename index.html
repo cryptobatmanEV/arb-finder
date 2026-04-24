@@ -1,0 +1,917 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Arb Scanner | The +EV Cave</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0a0d0f; --surface: #0f1215; --surface-2: #151a1e;
+      --green: #00dc6e; --yellow: #f5c842; --red: #f54262;
+      --border: rgba(255,255,255,0.07); --border-2: rgba(255,255,255,0.13);
+      --text: #e8eaed; --dim: rgba(232,234,237,0.45); --dimmer: rgba(232,234,237,0.22);
+      --mono: 'IBM Plex Mono', monospace; --sans: 'Syne', sans-serif;
+    }
+    html { font-size: 14px; }
+    body { background: var(--bg); color: var(--text); font-family: var(--mono); min-height: 100vh; }
+    #root { max-width: 1120px; margin: 0 auto; padding: 28px 16px 80px; }
+
+    .hdr { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 14px; margin-bottom: 22px; }
+    .hdr-title { font-family: var(--sans); font-size: 1.65rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; }
+    .hdr-title span { color: var(--green); }
+    .hdr-sub { font-size: 0.7rem; color: var(--dim); letter-spacing: 0.1em; text-transform: uppercase; margin-top: 5px; }
+    .hdr-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .timestamp { font-size: 0.7rem; color: var(--dim); text-align: right; }
+    .countdown { font-size: 0.68rem; color: var(--dimmer); }
+    .btn-refresh { background: transparent; border: 1px solid var(--green); color: var(--green); font-family: var(--mono); font-size: 0.75rem; padding: 7px 16px; cursor: pointer; border-radius: 4px; letter-spacing: 0.06em; transition: all 0.15s; }
+    .btn-refresh:hover:not(:disabled) { background: var(--green); color: #000; }
+    .btn-refresh:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    .platform-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+    .plat-badge { display: flex; align-items: center; gap: 7px; font-size: 0.7rem; padding: 4px 11px; border-radius: 4px; background: var(--surface-2); border: 1px solid var(--border); letter-spacing: 0.04em; }
+    .plat-name { font-weight: 600; }
+    .plat-count { color: var(--dim); }
+    .plat-err { color: var(--red); font-size: 0.65rem; }
+    .plat-load { color: var(--yellow); font-size: 0.65rem; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .dot-ok { background: var(--green); }
+    .dot-err { background: var(--red); }
+    .dot-load { background: var(--yellow); animation: blink 1s ease infinite; }
+    .dot-idle { background: var(--dimmer); }
+    @keyframes blink { 0%,100%{opacity:1}50%{opacity:0.25} }
+
+    .err-banner { background: rgba(245,66,98,0.06); border: 1px solid rgba(245,66,98,0.2); border-radius: 6px; padding: 9px 14px; font-size: 0.7rem; color: rgba(245,66,98,0.85); margin-bottom: 10px; }
+
+    .stats-bar { display: flex; margin-bottom: 18px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .stat { flex: 1; padding: 14px 18px; display: flex; flex-direction: column; gap: 3px; border-right: 1px solid var(--border); }
+    .stat:last-child { border-right: none; }
+    .stat-val { font-size: 1.25rem; font-weight: 600; }
+    .stat-lbl { font-size: 0.62rem; color: var(--dim); text-transform: uppercase; letter-spacing: 0.1em; }
+
+    .filters { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
+    .fbtn { background: var(--surface); border: 1px solid var(--border); color: var(--dim); font-family: var(--mono); font-size: 0.7rem; padding: 5px 13px; cursor: pointer; border-radius: 4px; letter-spacing: 0.05em; transition: all 0.15s; }
+    .fbtn:hover { border-color: var(--border-2); color: var(--text); }
+    .fbtn.active { border-color: var(--green); color: var(--green); background: rgba(0,220,110,0.06); }
+    .near-toggle { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 0.7rem; color: var(--dim); cursor: pointer; user-select: none; }
+    .tswitch { width: 32px; height: 18px; border-radius: 9px; background: var(--surface-2); border: 1px solid var(--border-2); position: relative; transition: all 0.2s; flex-shrink: 0; }
+    .tswitch.on { background: rgba(0,220,110,0.15); border-color: var(--green); }
+    .tknob { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--dim); transition: all 0.2s; }
+    .tswitch.on .tknob { left: 16px; background: var(--green); }
+
+    .sec-hdr { display: flex; align-items: center; gap: 10px; font-family: var(--sans); font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--dim); margin-bottom: 12px; }
+    .sec-hdr::after { content:''; flex:1; height:1px; background: var(--border); }
+    .sec-count { color: var(--green); font-family: var(--mono); font-size: 0.8rem; }
+
+    /* Cards */
+    .cards { display: flex; flex-direction: column; gap: 10px; }
+    .card { background: var(--surface); border-radius: 10px; padding: 16px 18px; border: 1px solid var(--border); border-left: 3px solid transparent; }
+    .card.strong { border-left-color: var(--green); }
+    .card.decent { border-left-color: var(--yellow); }
+    .card.thin   { border-left-color: rgba(255,255,255,0.22); }
+    .card.near   { border-left-color: rgba(255,255,255,0.1); }
+
+    .card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+    .card-tags { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .cat-tag { font-size: 0.6rem; padding: 2px 7px; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; background: var(--surface-2); border: 1px solid var(--border-2); color: var(--dim); }
+    .type-tag { font-size: 0.6rem; padding: 2px 7px; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; background: rgba(99,102,241,0.12); border: 1px solid rgba(99,102,241,0.25); color: #a5b4fc; }
+    .roi-tag { font-size: 0.62rem; padding: 2px 7px; border-radius: 3px; background: rgba(0,220,110,0.08); border: 1px solid rgba(0,220,110,0.18); color: var(--green); }
+    .margin-grp { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+    .margin-val { font-size: 1.05rem; font-weight: 700; }
+    .mv-strong { color: var(--green); } .mv-decent { color: var(--yellow); } .mv-thin { color: rgba(255,255,255,0.55); } .mv-near { color: var(--dim); }
+    .near-lbl { font-size: 0.6rem; color: var(--dimmer); text-transform: uppercase; letter-spacing: 0.08em; }
+    .card-title { font-family: var(--sans); font-size: 0.92rem; font-weight: 600; margin-bottom: 14px; line-height: 1.35; }
+
+    /* OddsJam legs */
+    .oj-legs { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: stretch; margin-bottom: 14px; }
+    .oj-vs { font-size: 0.65rem; color: var(--dimmer); font-weight: 700; display: flex; align-items: center; justify-content: center; }
+    .oj-leg { background: var(--surface-2); border-radius: 8px; padding: 12px 14px; border: 1px solid var(--border); display: flex; flex-direction: column; gap: 3px; }
+    .oj-plat { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; margin-bottom: 4px; }
+    .oj-bet-dir { font-size: 0.68rem; color: var(--dim); margin-bottom: 2px; }
+    .oj-bet-dir strong { color: var(--green); font-size: 0.75rem; }
+    .oj-raw-title { font-size: 0.72rem; color: var(--text); margin-bottom: 6px; line-height: 1.3; }
+    .oj-odds { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 3px; flex-wrap: wrap; }
+    .oj-american { font-size: 1.2rem; font-weight: 700; color: var(--text); }
+    .oj-decimal { font-size: 0.78rem; color: var(--yellow); font-weight: 600; }
+    .oj-cents { font-size: 0.68rem; color: var(--dim); }
+    .oj-stake-line { font-size: 0.72rem; margin-top: 4px; }
+    .oj-stake-val { font-weight: 600; color: var(--green); }
+    .oj-stake-lbl { color: var(--dim); }
+    .card-date { font-size: 0.65rem; color: var(--dim); font-family: var(--mono); margin-left: 10px; font-weight: 400; }
+
+    /* Calculator */
+    .oj-calc { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 12px 0 2px; border-top: 1px solid var(--border); }
+    .oj-calc-left { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .oj-calc-lbl { font-size: 0.68rem; color: var(--dim); white-space: nowrap; }
+    .stake-input-wrap { display: flex; align-items: center; gap: 4px; background: var(--surface-2); border: 1px solid var(--green); border-radius: 5px; padding: 4px 10px; }
+    .stake-dollar { color: var(--green); font-size: 0.8rem; }
+    .stake-input { background: transparent; border: none; outline: none; color: var(--text); font-family: var(--mono); font-size: 0.85rem; width: 72px; }
+    .stake-input::placeholder { color: var(--dimmer); }
+    .oj-pills { display: flex; gap: 5px; flex-wrap: wrap; }
+    .stake-pill { background: var(--surface-2); border: 1px solid var(--border-2); color: var(--dim); font-family: var(--mono); font-size: 0.68rem; padding: 4px 9px; border-radius: 4px; cursor: pointer; transition: all 0.15s; }
+    .stake-pill:hover { border-color: var(--green); color: var(--green); }
+    .oj-calc-right { text-align: right; }
+    .oj-profit-val { font-size: 1.3rem; font-weight: 700; color: var(--green); }
+    .oj-profit-lbl { font-size: 0.65rem; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; }
+    .oj-return-lbl { font-size: 0.65rem; color: var(--dimmer); margin-top: 3px; }
+    .oj-not-yet { font-size: 0.72rem; color: var(--dim); }
+
+    /* Platform colors */
+    .pm-c { color: #818cf8; } .ka-c { color: #22d3ee; } .nv-c { color: #4ade80; }
+
+    .near-section { margin-top: 24px; }
+    .near-hdr-btn { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.7rem; color: var(--dim); padding: 8px 0; user-select: none; transition: color 0.15s; background: none; border: none; font-family: var(--mono); }
+    .near-hdr-btn:hover { color: var(--text); }
+    .chev { font-size: 0.62rem; transition: transform 0.2s; display: inline-block; }
+    .chev.open { transform: rotate(90deg); }
+
+    .empty { text-align: center; padding: 52px 20px; color: var(--dim); font-size: 0.78rem; line-height: 2; }
+    .empty-icon { font-size: 2.2rem; margin-bottom: 10px; }
+
+    .skel { background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 50%, var(--surface) 75%); background-size: 200% 100%; animation: shim 1.6s infinite; border-radius: 10px; }
+    @keyframes shim { 0%{background-position:200% 0}100%{background-position:-200% 0} }
+    .skel-card { height: 160px; margin-bottom: 10px; }
+
+    @media(max-width:600px) {
+      .oj-legs { grid-template-columns: 1fr; }
+      .oj-vs { display: none; }
+      .hdr { flex-direction: column; }
+      .near-toggle { margin-left: 0; }
+      .stats-bar { flex-wrap: wrap; }
+      .stat { min-width: 100px; }
+    }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+// ─── CONSTANTS ───────────────────────────────────────────────────────────────
+const REFRESH_SECS = 60;
+const BASE_STAKE   = 100;
+const PLAT_LB  = { polymarket:'Polymarket', kalshi:'Kalshi', novig:'Novig' };
+const PLAT_CLS = { polymarket:'pm-c', kalshi:'ka-c', novig:'nv-c' };
+const FILTERS  = ['all','mlb','nba','nfl','nhl','crypto','other'];
+const FILTER_LB = { all:'All', mlb:'MLB', nba:'NBA', nfl:'NFL', nhl:'NHL', crypto:'Crypto', other:'Other' };
+
+// ─── TEAM NORMALIZATION ───────────────────────────────────────────────────────
+const TEAM_MAP = {
+  // NBA
+  'knicks':'new york','new york knicks':'new york',
+  'nets':'brooklyn','brooklyn nets':'brooklyn',
+  'celtics':'boston','boston celtics':'boston',
+  'lakers':'la lakers','los angeles lakers':'la lakers',
+  'clippers':'la clippers','los angeles clippers':'la clippers','la clippers':'la clippers',
+  'warriors':'golden state','golden state warriors':'golden state',
+  'bucks':'milwaukee','milwaukee bucks':'milwaukee',
+  'heat':'miami','miami heat':'miami',
+  'bulls':'chicago','chicago bulls':'chicago',
+  'sixers':'philadelphia','76ers':'philadelphia','philadelphia 76ers':'philadelphia',
+  'raptors':'toronto','toronto raptors':'toronto',
+  'hawks':'atlanta','atlanta hawks':'atlanta',
+  'hornets':'charlotte','charlotte hornets':'charlotte',
+  'pistons':'detroit','detroit pistons':'detroit',
+  'cavaliers':'cleveland','cleveland cavaliers':'cleveland',
+  'pacers':'indiana','indiana pacers':'indiana',
+  'magic':'orlando','orlando magic':'orlando',
+  'wizards':'washington','washington wizards':'washington',
+  'spurs':'san antonio','san antonio spurs':'san antonio',
+  'thunder':'oklahoma city','oklahoma city thunder':'oklahoma city',
+  'nuggets':'denver','denver nuggets':'denver',
+  'jazz':'utah','utah jazz':'utah',
+  'suns':'phoenix','phoenix suns':'phoenix',
+  'trail blazers':'portland','blazers':'portland','portland trail blazers':'portland',
+  'timberwolves':'minnesota','minnesota timberwolves':'minnesota',
+  'wolves':'minnesota',
+  'grizzlies':'memphis','memphis grizzlies':'memphis',
+  'pelicans':'new orleans','new orleans pelicans':'new orleans',
+  'rockets':'houston','houston rockets':'houston',
+  'mavericks':'dallas','dallas mavericks':'dallas','mavs':'dallas',
+  'kings':'sacramento','sacramento kings':'sacramento',
+  // MLB
+  'yankees':'new york yankees','new york yankees':'new york yankees',
+  'mets':'new york mets','new york mets':'new york mets',
+  'red sox':'boston','boston red sox':'boston',
+  'dodgers':'los angeles dodgers','los angeles dodgers':'los angeles dodgers',
+  'angels':'los angeles angels','los angeles angels':'los angeles angels','anaheim':'los angeles angels',
+  'cubs':'chicago cubs','chicago cubs':'chicago cubs',
+  'white sox':'chicago white sox','chicago white sox':'chicago white sox',
+  'astros':'houston','houston astros':'houston',
+  'braves':'atlanta','atlanta braves':'atlanta',
+  'cardinals':'st louis','st. louis cardinals':'st louis','cardinals':'st louis',
+  'phillies':'philadelphia','philadelphia phillies':'philadelphia phillies',
+  'padres':'san diego','san diego padres':'san diego',
+  'giants':'san francisco','san francisco giants':'san francisco',
+  'rangers':'texas','texas rangers':'texas',
+  'mariners':'seattle','seattle mariners':'seattle',
+  'brewers':'milwaukee','milwaukee brewers':'milwaukee brewers',
+  'twins':'minnesota','minnesota twins':'minnesota twins',
+  'tigers':'detroit','detroit tigers':'detroit tigers',
+  'guardians':'cleveland','cleveland guardians':'cleveland guardians',
+  'royals':'kansas city','kansas city royals':'kansas city',
+  'athletics':'oakland','oakland athletics':'oakland',
+  'orioles':'baltimore','baltimore orioles':'baltimore',
+  'rays':'tampa bay','tampa bay rays':'tampa bay',
+  'blue jays':'toronto','toronto blue jays':'toronto blue jays',
+  'nationals':'washington','washington nationals':'washington nationals',
+  'marlins':'miami','miami marlins':'miami marlins',
+  'rockies':'colorado','colorado rockies':'colorado',
+  'diamondbacks':'arizona','arizona diamondbacks':'arizona',
+  'pirates':'pittsburgh','pittsburgh pirates':'pittsburgh',
+  'reds':'cincinnati','cincinnati reds':'cincinnati',
+};
+
+// Polymarket team abbreviation → full normalized name (matches KALSHI_CODES output)
+const PM_ABBR = {
+  // NBA
+  atl:'atlanta',bos:'boston',bkn:'brooklyn',cha:'charlotte',chi:'chicago',
+  cle:'cleveland',dal:'dallas',den:'denver',det:'detroit',gsw:'golden state',
+  hou:'houston',ind:'indiana',lac:'la clippers',lal:'la lakers',mem:'memphis',
+  mia:'miami',mil:'milwaukee',min:'minnesota',nop:'new orleans',nyk:'new york',
+  okc:'oklahoma city',orl:'orlando',phi:'philadelphia',phx:'phoenix',por:'portland',
+  sac:'sacramento',sas:'san antonio',tor:'toronto',uta:'utah',was:'washington',
+  // MLB
+  ari:'arizona',oak:'oakland',bal:'baltimore',chc:'chicago cubs',cin:'cincinnati',
+  col:'colorado',cws:'chicago white sox',hou:'houston',kc:'kansas city',
+  laa:'los angeles angels',lad:'los angeles dodgers',mia:'miami',mil:'milwaukee',
+  min:'minnesota',nym:'new york mets',nyy:'new york yankees',
+  phi:'philadelphia phillies',pit:'pittsburgh',sd:'san diego',sea:'seattle',
+  sf:'san francisco',stl:'st louis',tb:'tampa bay',tex:'texas',
+  tor:'toronto blue jays',wsh:'washington nationals',
+};
+
+// Kalshi 3-letter codes → normalized team name
+const KALSHI_CODES = {
+  // NBA
+  ATL:'atlanta', BOS:'boston', BKN:'brooklyn', CHA:'charlotte', CHI:'chicago',
+  CLE:'cleveland', DAL:'dallas', DEN:'denver', DET:'detroit', GSW:'golden state',
+  HOU:'houston', IND:'indiana', LAC:'la clippers', LAL:'la lakers', MEM:'memphis',
+  MIA:'miami', MIL:'milwaukee', MIN:'minnesota', NOP:'new orleans', NYK:'new york',
+  OKC:'oklahoma city', ORL:'orlando', PHI:'philadelphia', PHX:'phoenix', POR:'portland',
+  SAC:'sacramento', SAS:'san antonio', TOR:'toronto', UTA:'utah', WAS:'washington',
+  // MLB
+  ARI:'arizona', ATL:'atlanta', BAL:'baltimore', BOS:'boston', CHC:'chicago cubs',
+  CWS:'chicago white sox', CIN:'cincinnati', CLE:'cleveland', COL:'colorado',
+  DET:'detroit', HOU:'houston', KCR:'kansas city', LAA:'los angeles angels',
+  LAD:'los angeles dodgers', MIA:'miami', MIL:'milwaukee', MIN:'minnesota',
+  NYM:'new york mets', NYY:'new york yankees', OAK:'oakland', PHI:'philadelphia phillies',
+  PIT:'pittsburgh', SDP:'san diego', SEA:'seattle', SFG:'san francisco',
+  STL:'st louis', TBR:'tampa bay', TEX:'texas', TOR:'toronto blue jays',
+  WSH:'washington nationals',
+};
+
+function normalizeTeam(name) {
+  if (!name) return null;
+  const t = name.toLowerCase().trim();
+  return TEAM_MAP[t] || t;
+}
+
+function teamsFromKalshiTicker(ticker) {
+  // KXNBAGAME-26APR25DETORL-ORL  →  teams: [DET, ORL]
+  // KXNBASPREAD-26APR25DETORL-ORL7 → same
+  const parts = ticker.split('-');
+  if (parts.length < 2) return [];
+  const gamePart = parts[1]; // e.g. 26APR25DETORL
+  // Strip the date prefix (digits + month + digits = 9 chars like 26APR25)
+  const dateStripped = gamePart.replace(/^\d{2}[A-Z]{3}\d{2}/, '');
+  // dateStripped = DETORL → split into 3-char codes
+  const teams = [];
+  for (let i = 0; i < dateStripped.length; i += 3) {
+    const code = dateStripped.slice(i, i + 3);
+    if (code.length === 3) teams.push(KALSHI_CODES[code] || code.toLowerCase());
+  }
+  return teams;
+}
+
+function dateFromKalshiTicker(ticker) {
+  // 26APR25 → 2026-04-25
+  const m = ticker.match(/(\d{2})([A-Z]{3})(\d{2})/);
+  if (!m) return null;
+  const months = {JAN:'01',FEB:'02',MAR:'03',APR:'04',MAY:'05',JUN:'06',
+                  JUL:'07',AUG:'08',SEP:'09',OCT:'10',NOV:'11',DEC:'12'};
+  return `20${m[1]}-${months[m[2]] || '01'}-${m[3].padStart(2,'0')}`;
+}
+
+function lineFromKalshiTicker(ticker) {
+  // Last segment: ORL7 → 7, 228 → 228, OKC-3 → -3
+  const parts = ticker.split('-');
+  const last = parts[parts.length - 1];
+  const m = last.match(/(-?\d+\.?\d*)$/);
+  return m ? parseFloat(m[1]) : null;
+}
+
+function sportFromSeries(series) {
+  if (/^KXNBA/.test(series) || /^KXWNBA/.test(series)) return 'nba';
+  if (/^KXMLB/.test(series) || /^KXNRFI/.test(series)) return 'mlb';
+  if (/^KXNFL/.test(series)) return 'nfl';
+  if (/^KXNHL/.test(series)) return 'nhl';
+  if (/KXBTC|KXETH|KXSOL/.test(series)) return 'crypto';
+  return 'other';
+}
+
+function marketTypeFromSeries(series) {
+  if (/GAME/.test(series)) return 'moneyline';
+  if (/SPREAD/.test(series)) return 'spread';
+  if (/TOTAL/.test(series)) return 'total';
+  if (/PTS|POINTS/.test(series)) return 'prop';
+  if (/REB/.test(series)) return 'prop';
+  if (/AST/.test(series)) return 'prop';
+  if (/3PT/.test(series)) return 'prop';
+  if (/HIT|HR|RBI|PITCH/.test(series)) return 'prop';
+  if (/NRFI/.test(series)) return 'prop';
+  return 'other';
+}
+
+// ─── POLYMARKET EXTRACTION ────────────────────────────────────────────────────
+const NBA_TEAMS_RE = /\b(knicks|new york knicks|nets|brooklyn|celtics|boston|lakers|clippers|warriors|golden state|bucks|milwaukee|heat|miami|bulls|chicago|sixers|76ers|raptors|toronto|hawks|atlanta|hornets|charlotte|pistons|detroit|cavaliers|cleveland|pacers|indiana|magic|orlando|wizards|washington|spurs|san antonio|thunder|oklahoma city|nuggets|denver|jazz|utah|suns|phoenix|blazers|portland|timberwolves|wolves|minnesota|grizzlies|memphis|pelicans|new orleans|rockets|houston|mavericks|dallas|kings|sacramento)\b/gi;
+const MLB_TEAMS_RE = /\b(yankees|mets|red sox|dodgers|angels|cubs|white sox|astros|braves|cardinals|phillies|padres|giants|rangers|mariners|brewers|twins|tigers|guardians|royals|athletics|orioles|rays|blue jays|nationals|marlins|rockies|diamondbacks|pirates|reds)\b/gi;
+const NFL_TEAMS_RE = /\b(chiefs|eagles|cowboys|packers|patriots|bills|ravens|49ers|niners|steelers|seahawks|rams|broncos|chargers|raiders|bears|vikings|lions|falcons|saints|buccaneers|panthers|commanders|jets|bengals|browns|texans|jaguars|titans|colts|dolphins)\b/gi;
+
+function extractPolymarketStructure(m) {
+  const title = m.question || m.title || '';
+  const t = title.toLowerCase();
+  const slug = m.eventSlug || m.slug || '';
+
+  // Filter: skip first-half markets - Kalshi has no equivalent
+  if (/\b1h\b/i.test(title)) return null;
+
+  // Determine sport from event slug
+  let sport = 'other';
+  if (slug.startsWith('nba-')) sport = 'nba';
+  else if (slug.startsWith('mlb-')) sport = 'mlb';
+  else if (slug.startsWith('nfl-')) sport = 'nfl';
+  else if (slug.startsWith('nhl-')) sport = 'nhl';
+  else if (/bitcoin|btc|ethereum|eth/.test(t)) sport = 'crypto';
+
+  // Market type detection based on Polymarket title patterns:
+  // "Thunder vs. Suns" → moneyline
+  // "Thunder vs. Suns: O/U 215.5" → total
+  // "Spread: Thunder (-9.5)" → spread
+  // "SGA: Points O/U 31.5" → prop
+  // "Thunder vs. Suns: 1H ..." → filtered above
+  let marketType = 'moneyline';
+  let line = null;
+
+  if (/finals|championship|stanley cup|world series|super bowl/i.test(t)) {
+    marketType = 'championship';
+  } else if (/O\/U\s*([\d]+\.?[\d]*)/i.test(title)) {
+    const ouM = title.match(/O\/U\s*([\d]+\.?[\d]*)/i);
+    line = ouM ? parseFloat(ouM[1]) : null;
+    // Player prop lines are small (<60), game totals are large (>100)
+    marketType = (line !== null && line < 60) ? 'prop' : 'total';
+  } else if (/\bspread\b/i.test(title) || /\([+-]?[\d]+\.?[\d]*\)/.test(title)) {
+    marketType = 'spread';
+    // Extract from parentheses: "Spread: Thunder (-9.5)" → 9.5
+    const spM = title.match(/\([-+]?([\d]+\.?[\d]*)\)/);
+    line = spM ? parseFloat(spM[1]) : null;
+  } else if (/\+\s*points|pts|rebounds|assists|threes|3pt|3-point/i.test(title)) {
+    marketType = 'prop';
+    const nums = (title.match(/[\d]+\.?[\d]*/g) || []).map(Number).filter(n => n > 0 && n < 80);
+    line = nums.length > 0 ? nums[nums.length - 1] : null;
+  }
+
+  // Extract teams from slug: nba-okc-phx-2026-04-25 → ['okc','phx']
+  let teams = [];
+  const slugParts = slug.split('-');
+  if (slugParts.length >= 3 && ['nba','mlb','nfl','nhl'].includes(slugParts[0])) {
+    const dateIdx = slugParts.findIndex(p => /^20\d{2}$/.test(p));
+    if (dateIdx >= 3) teams = slugParts.slice(1, dateIdx);
+  }
+
+  // Game date from slug: nba-okc-phx-2026-04-25 → 2026-04-25
+  const slugDateM = slug.match(/(\d{4}-\d{2}-\d{2})$/);
+  const gameDate = slugDateM ? slugDateM[1] : ((m.end || m.endDateIso || '').slice(0, 10) || null);
+
+  // Prices
+  const prices = m.outcomePrices
+    ? (Array.isArray(m.outcomePrices) ? m.outcomePrices : JSON.parse(m.outcomePrices || '[]'))
+    : [];
+  const yesPrice = parseFloat(prices[0] || 0);
+  const noPrice  = parseFloat(prices[1] || 0);
+  if (!yesPrice || yesPrice < 0.02 || yesPrice > 0.98) return null;
+
+  return {
+    id: 'pm_' + (m.id || m.conditionId || slug + Math.random()),
+    platform: 'polymarket',
+    rawTitle: title,
+    sport, teams, marketType, line, gameDate,
+    yesPrice, noPrice: noPrice || (1 - yesPrice),
+    url: slug ? ('https://polymarket.com/sports/' + sport + '/' + slug) : 'https://polymarket.com',
+  };
+}
+
+
+// ─── KALSHI EXTRACTION ────────────────────────────────────────────────────────
+function extractKalshiStructure(m) {
+  const ticker  = m.ticker || '';
+  const seriesM = ticker.match(/^(KX[A-Z0-9]+?)-/);
+  const series  = seriesM ? seriesM[1] : '';
+  const sport   = sportFromSeries(series);
+
+  // Detect futures ticker format: KXNBA-26-OKC (no date in middle)
+  const isFutures = /^KX(NBA|MLB|NFL|NHL|WNBA)-\d{2}-/.test(ticker);
+
+  let marketType, teams, line, gameDate;
+
+  if (isFutures) {
+    marketType = 'championship';
+    const teamCode = ticker.split('-').pop();
+    const teamName = KALSHI_CODES[teamCode] || teamCode.toLowerCase();
+    teams = [teamName];
+    line = null;
+    gameDate = null;
+  } else {
+    marketType = marketTypeFromSeries(series);
+    teams = teamsFromKalshiTicker(ticker);
+    gameDate = dateFromKalshiTicker(ticker);
+    if (marketType === 'spread' || marketType === 'total') {
+      // Extract line from title (more accurate than ticker which drops decimals)
+      const mTitle = m.title || '';
+      const overM = mTitle.match(/over\s+([\d]+\.?[\d]*)/i);
+      const ouM   = mTitle.match(/O\/U\s*([\d]+\.?[\d]*)/i);
+      const tickerLine = lineFromKalshiTicker(ticker);
+      line = overM ? parseFloat(overM[1]) : ouM ? parseFloat(ouM[1]) : tickerLine;
+    } else {
+      line = null;
+    }
+  }
+
+  const yAsk = parseFloat(m.yes_ask_dollars) || 0;
+  const yBid = parseFloat(m.yes_bid_dollars) || 0;
+  const nAsk = parseFloat(m.no_ask_dollars)  || 0;
+  const nBid = parseFloat(m.no_bid_dollars)  || 0;
+
+  const yesPrice = yAsk > 0 ? yAsk : yBid;
+  const noPrice  = nAsk > 0 ? nAsk : nBid;
+  if (!yesPrice || yesPrice < 0.02 || yesPrice > 0.98) return null;
+
+  return {
+    id: 'ka_' + ticker,
+    platform: 'kalshi',
+    rawTitle: m.title || ticker,
+    sport, teams, marketType, line, gameDate, isFutures,
+    yesPrice, noPrice: noPrice || (1 - yesPrice),
+    url: `https://kalshi.com/markets/${ticker}`,
+  };
+}
+
+// ─── MATCHING ENGINE ──────────────────────────────────────────────────────────
+function expandTeam(t) {
+  // Expand short abbreviation to full name if possible
+  return PM_ABBR[t] || KALSHI_CODES[t.toUpperCase()] || t;
+}
+
+function teamsOverlap(a, b) {
+  if (!a.length || !b.length) return false;
+  const expandedA = a.map(expandTeam);
+  const expandedB = b.map(expandTeam);
+  return expandedA.some(t => expandedB.includes(t)) ||
+         a.some(t => b.includes(t));
+}
+
+function matchMarkets(structured) {
+  const platforms = [...new Set(structured.map(m => m.platform))];
+  if (platforms.length < 2) return [];
+
+  const byPlatform = {};
+  platforms.forEach(p => { byPlatform[p] = structured.filter(m => m.platform === p); });
+
+  const pairs = [];
+  const seen  = new Set();
+
+  for (let i = 0; i < platforms.length; i++) {
+    for (let j = i + 1; j < platforms.length; j++) {
+      const pA = platforms[i], pB = platforms[j];
+      byPlatform[pA].forEach(mA => {
+        byPlatform[pB].forEach(mB => {
+          // Must match: sport + marketType
+          if (mA.sport !== mB.sport) return;
+          if (mA.sport === 'other') return; // skip unclassified
+          if (mA.marketType !== mB.marketType) return;
+          if (mA.marketType === 'other') return;
+
+          // Must share at least one team
+          if (mA.teams.length > 0 && mB.teams.length > 0 && !teamsOverlap(mA.teams, mB.teams)) return;
+
+          // For futures/championship markets, skip date check (Kalshi/PM expire ~same month)
+          const bothFutures = mA.marketType === 'championship' && mB.marketType === 'championship';
+          if (!bothFutures && mA.gameDate && mB.gameDate && mA.gameDate !== mB.gameDate) return;
+
+          // For spread/total, line must be within 1 point
+          if (mA.marketType === 'spread' || mA.marketType === 'total') {
+            if (mA.line !== null && mB.line !== null && Math.abs(mA.line - mB.line) > 0.6) return;
+          }
+
+          const key = [mA.id, mB.id].sort().join('||');
+          if (seen.has(key)) return;
+          seen.add(key);
+          pairs.push([mA, mB]);
+        });
+      });
+    }
+  }
+  return pairs;
+}
+
+// ─── ARB CALCULATION ──────────────────────────────────────────────────────────
+const NEAR_ARB_BAND = 0.02;
+
+function calcArb(mA, mB) {
+  const combos = [
+    { oA:'YES', oB:'NO',  pA: mA.yesPrice, pB: mB.noPrice  },
+    { oA:'NO',  oB:'YES', pA: mA.noPrice,  pB: mB.yesPrice },
+  ];
+  let best = null;
+  combos.forEach(c => {
+    if (!c.pA || !c.pB) return;
+    const sum = c.pA + c.pB;
+    if (!best || sum < best.sum) best = { ...c, sum };
+  });
+  if (!best) return null;
+
+  // Sanity: sum must be between 0.82 and 1.18 to be a real same-market pair
+  if (best.sum < 0.82 || best.sum > 1.18) return null;
+  // Both legs must have liquidity
+  if (best.pA < 0.04 || best.pB < 0.04) return null;
+
+  const margin = (1 - best.sum) * 100;
+  const isArb  = margin > 0;
+  const isNear = !isArb && margin > -(NEAR_ARB_BAND * 100);
+  if (!isArb && !isNear) return null;
+
+  const denom  = best.pA + best.pB;
+  const stakeA = BASE_STAKE * best.pA / denom;
+  const stakeB = BASE_STAKE * best.pB / denom;
+  const profit = isArb ? BASE_STAKE * (1 / denom - 1) : 0;
+  const roi    = isArb ? (1 / denom - 1) * 100 : 0;
+
+  // Build display title
+  const title = mA.teams.length > 0
+    ? mA.teams.map(t => t.charAt(0).toUpperCase() + t.slice(1)).join(' vs ')
+    : mA.rawTitle;
+
+  const lineStr = mA.line ? ` (${mA.marketType === 'spread' ? '±' : 'O/U '}${mA.line})` : '';
+  return {
+    id: mA.id + '||' + mB.id,
+    title: title + lineStr,
+    gameDate: mA.gameDate || mB.gameDate,
+    sport: mA.sport,
+    marketType: mA.marketType,
+    legA: {
+      platform: mA.platform, outcome: best.oA, price: best.pA, stake: stakeA,
+      rawTitle: mA.rawTitle,
+    },
+    legB: {
+      platform: mB.platform, outcome: best.oB, price: best.pB, stake: stakeB,
+      rawTitle: mB.rawTitle,
+    },
+    impliedSum: best.sum * 100,
+    margin, profit, roi, isArb, isNear,
+  };
+}
+
+// ─── FETCHERS ─────────────────────────────────────────────────────────────────
+async function fetchRaw(url) {
+  const bust = url + (url.includes('?') ? '&' : '?') + '_t=' + Date.now();
+  const res  = await fetch(bust, { cache: 'no-store', signal: AbortSignal.timeout(30000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function fetchPolymarket() {
+  const data = await fetchRaw('/api/polymarket');
+  const markets = data.markets || (Array.isArray(data) ? data : []);
+  return markets.map(m => extractPolymarketStructure(m)).filter(Boolean);
+}
+
+async function fetchKalshi() {
+  const data = await fetchRaw('/api/kalshi');
+  const now  = Date.now();
+  const cut  = now + 48 * 60 * 60 * 1000;
+  return (data.markets || [])
+    .filter(m => {
+      if (m.mve_collection_ticker) return false;
+      if (m.market_type !== 'binary') return false;
+      if (m.status !== 'active') return false;
+      const end = m.expected_expiration_time;
+      if (!end) return true;
+      const endMs = new Date(end).getTime();
+      return endMs > now && endMs <= cut;
+    })
+    .map(m => extractKalshiStructure(m))
+    .filter(Boolean);
+}
+
+async function fetchNovig() {
+  const data = await fetchRaw('/api/novig');
+  return []; // normalizer TBD when credentials arrive
+}
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+const fmt    = (n, d=2) => (+n).toFixed(d);
+const fmtUSD = n => '$' + fmt(n, 2);
+const fmtPct = n => fmt(n, 2) + '%';
+
+function probToAmerican(p) {
+  if (!p || p <= 0 || p >= 1) return '—';
+  return p >= 0.5
+    ? '-' + Math.round(p / (1 - p) * 100)
+    : '+' + Math.round((1 - p) / p * 100);
+}
+
+// ─── COMPONENTS ───────────────────────────────────────────────────────────────
+function PlatBadge({ name, status, count }) {
+  const dot = status === 'ok' ? 'dot-ok' : status === 'error' ? 'dot-err' : status === 'loading' ? 'dot-load' : 'dot-idle';
+  return (
+    <div className="plat-badge">
+      <div className={`dot ${dot}`} />
+      <span className="plat-name">{PLAT_LB[name]}</span>
+      {status === 'ok'      && <span className="plat-count">{count} mkts</span>}
+      {status === 'error'   && <span className="plat-err">error</span>}
+      {status === 'loading' && <span className="plat-load">loading…</span>}
+    </div>
+  );
+}
+
+function OJLeg({ leg, stake }) {
+  const cls     = PLAT_CLS[leg.platform] || '';
+  const amer    = probToAmerican(leg.price);
+  const decimal = (1 / leg.price).toFixed(2) + 'x';
+  const ret     = stake / leg.price;
+  // Summarize what the bet means in plain English
+  const betDesc = leg.outcome === 'YES' ? leg.rawTitle : `NOT: ${leg.rawTitle}`;
+  return (
+    <div className="oj-leg">
+      <div className={`oj-plat ${cls}`}>{PLAT_LB[leg.platform]}</div>
+      <div className="oj-bet-dir">Bet <strong>{leg.outcome}</strong></div>
+      <div className="oj-raw-title">{leg.rawTitle}</div>
+      <div className="oj-odds">
+        <span className="oj-american">{amer}</span>
+        <span className="oj-decimal">{decimal}</span>
+        <span className="oj-cents">{fmt(leg.price * 100, 1)}¢</span>
+      </div>
+      <div className="oj-stake-line">
+        <span className="oj-stake-val">{fmtUSD(stake)}</span>
+        <span className="oj-stake-lbl"> to win {fmtUSD(ret)}</span>
+      </div>
+    </div>
+  );
+}
+
+function ArbCard({ opp }) {
+  const { legA, legB, margin, roi, sport, marketType, title, isNear, impliedSum } = opp;
+  const [totalStake, setTotalStake] = useState('100');
+  const ts     = Math.max(parseFloat(totalStake) || 100, 1);
+  const denom  = legA.price + legB.price;
+  const stakeA = ts * legA.price / denom;
+  const stakeB = ts * legB.price / denom;
+  const profit = isNear ? 0 : ts * (1 / denom - 1);
+
+  const cls = isNear ? 'card near' : margin > 3 ? 'card strong' : margin > 1 ? 'card decent' : 'card thin';
+  const mvCls = isNear ? 'mv-near' : margin > 3 ? 'mv-strong' : margin > 1 ? 'mv-decent' : 'mv-thin';
+
+  return (
+    <div className={cls}>
+      <div className="card-top">
+        <div className="card-tags">
+          <span className="cat-tag">{sport.toUpperCase()}</span>
+          <span className="type-tag">{marketType.toUpperCase()}</span>
+          {!isNear && <span className="roi-tag">ROI {fmtPct(roi)}</span>}
+        </div>
+        <div className="margin-grp">
+          <span className={`margin-val ${mvCls}`}>{fmtPct(margin)}</span>
+          {isNear && <span className="near-lbl">near arb</span>}
+        </div>
+      </div>
+
+      <div className="card-title">
+        {title}
+        {opp.gameDate && (
+          <span className="card-date">
+            {new Date(opp.gameDate + 'T12:00:00').toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })}
+          </span>
+        )}
+      </div>
+
+      <div className="oj-legs">
+        <OJLeg leg={legA} stake={stakeA} />
+        <div className="oj-vs">VS</div>
+        <OJLeg leg={legB} stake={stakeB} />
+      </div>
+
+      <div className="oj-calc" onClick={e => e.stopPropagation()}>
+        <div className="oj-calc-left">
+          <span className="oj-calc-lbl">Total stake</span>
+          <div className="stake-input-wrap">
+            <span className="stake-dollar">$</span>
+            <input className="stake-input" type="number" min="1" value={totalStake} onChange={e => setTotalStake(e.target.value)} />
+          </div>
+          <div className="oj-pills">
+            {[50,100,250,500,1000].map(v => (
+              <button key={v} className="stake-pill" onClick={() => setTotalStake(String(v))}>${v}</button>
+            ))}
+          </div>
+        </div>
+        <div className="oj-calc-right">
+          {isNear
+            ? <div className="oj-not-yet">Not yet profitable — watch this</div>
+            : <>
+                <div className="oj-profit-val">+{fmtUSD(profit)}</div>
+                <div className="oj-profit-lbl">guaranteed profit</div>
+                <div className="oj-return-lbl">implied sum {fmtPct(impliedSum)}</div>
+              </>
+          }
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── APP ──────────────────────────────────────────────────────────────────────
+function App() {
+  const [markets,  setMarkets]  = useState({ polymarket:[], kalshi:[], novig:[] });
+  const [status,   setStatus]   = useState({ polymarket:'idle', kalshi:'idle', novig:'idle' });
+  const [errors,   setErrors]   = useState({});
+  const [arbs,     setArbs]     = useState([]);
+  const [near,     setNear]     = useState([]);
+  const [pairs,    setPairs]    = useState(0);
+  const [loading,  setLoading]  = useState(false);
+  const [lastUp,   setLastUp]   = useState(null);
+  const [countdown,setCdown]    = useState(REFRESH_SECS);
+  const [filter,   setFilter]   = useState('all');
+  const [showNear, setShowNear] = useState(true);
+  const [nearOpen, setNearOpen] = useState(true);
+  const [firstLoad,setFirst]    = useState(true);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setStatus({ polymarket:'loading', kalshi:'loading', novig:'loading' });
+
+    const mkts = { polymarket:[], kalshi:[], novig:[] };
+    const stat = { polymarket:'idle', kalshi:'idle', novig:'idle' };
+    const errs = {};
+
+    await Promise.all([
+      fetchPolymarket().then(d => { mkts.polymarket = d; stat.polymarket = 'ok'; }).catch(e => { stat.polymarket = 'error'; errs.polymarket = e.message; }),
+      fetchKalshi().then(d => { mkts.kalshi = d; stat.kalshi = 'ok'; }).catch(e => { stat.kalshi = 'error'; errs.kalshi = e.message; }),
+      fetchNovig().then(d => { mkts.novig = d; stat.novig = 'ok'; }).catch(e => { stat.novig = 'error'; errs.novig = e.message; }),
+    ]);
+
+    setMarkets(mkts);
+    setStatus(stat);
+    setErrors(errs);
+
+    // Match and calc arbs
+    const allStructured = [...mkts.polymarket, ...mkts.kalshi, ...mkts.novig];
+    const matched = matchMarkets(allStructured);
+    setPairs(matched.length);
+
+    const arbList = [], nearList = [];
+    matched.forEach(([mA, mB]) => {
+      const opp = calcArb(mA, mB);
+      if (!opp) return;
+      if (opp.isArb) arbList.push(opp);
+      else if (opp.isNear) nearList.push(opp);
+    });
+
+    arbList.sort((a,b) => b.margin - a.margin);
+    nearList.sort((a,b) => b.margin - a.margin);
+    setArbs(arbList);
+    setNear(nearList);
+    setLastUp(new Date());
+    setLoading(false);
+    setFirst(false);
+    setCdown(REFRESH_SECS);
+  }, []);
+
+  useEffect(() => { refresh(); }, []);
+  useEffect(() => {
+    const id = setInterval(() => {
+      setCdown(c => { if (c <= 1) { refresh(); return REFRESH_SECS; } return c - 1; });
+    }, 1000);
+    return () => clearInterval(id);
+  }, [refresh]);
+
+  const fArbs = filter === 'all' ? arbs : arbs.filter(a => a.sport === filter);
+  const fNear = filter === 'all' ? near : near.filter(a => a.sport === filter);
+  const totalMkts = Object.values(markets).reduce((s,m) => s + m.length, 0);
+  const bestM = arbs.length > 0 ? arbs[0].margin : null;
+
+  return (
+    <div>
+      <div className="hdr">
+        <div>
+          <div className="hdr-title">LIVE ARB <span>SCANNER</span></div>
+          <div className="hdr-sub">The +EV Cave · Prediction Market Arbitrage</div>
+        </div>
+        <div className="hdr-right">
+          {lastUp && (
+            <div style={{textAlign:'right'}}>
+              <div className="timestamp">Updated {lastUp.toLocaleTimeString()}</div>
+              <div className="countdown">next refresh in {countdown}s</div>
+            </div>
+          )}
+          <button className="btn-refresh" onClick={refresh} disabled={loading}>
+            {loading ? '↻ Refreshing…' : '↻ Refresh'}
+          </button>
+        </div>
+      </div>
+
+      <div className="platform-row">
+        {Object.entries(status).map(([p,s]) => (
+          <PlatBadge key={p} name={p} status={s} count={markets[p]?.length || 0} />
+        ))}
+      </div>
+
+      {Object.entries(errors).map(([p,msg]) => (
+        <div key={p} className="err-banner"><strong>{PLAT_LB[p]}:</strong> {msg}</div>
+      ))}
+
+      {!firstLoad && (
+        <div className="stats-bar">
+          <div className="stat">
+            <div className="stat-val" style={{color: arbs.length > 0 ? 'var(--green)' : 'var(--dim)'}}>{arbs.length}</div>
+            <div className="stat-lbl">Live Arbs</div>
+          </div>
+          <div className="stat">
+            <div className="stat-val" style={{color: near.length > 0 ? 'var(--yellow)' : 'var(--dim)'}}>{near.length}</div>
+            <div className="stat-lbl">Near-Arbs</div>
+          </div>
+          <div className="stat">
+            <div className="stat-val" style={{color: bestM > 0 ? 'var(--green)' : 'var(--dim)'}}>{bestM != null ? fmtPct(bestM) : '—'}</div>
+            <div className="stat-lbl">Best Margin</div>
+          </div>
+          <div className="stat">
+            <div className="stat-val">{totalMkts.toLocaleString()}</div>
+            <div className="stat-lbl">Markets Scanned</div>
+          </div>
+          <div className="stat">
+            <div className="stat-val">{pairs.toLocaleString()}</div>
+            <div className="stat-lbl">Pairs Matched</div>
+          </div>
+        </div>
+      )}
+
+      <div className="filters">
+        {FILTERS.map(f => (
+          <button key={f} className={`fbtn${filter===f?' active':''}`} onClick={() => setFilter(f)}>
+            {FILTER_LB[f]}
+          </button>
+        ))}
+        <div className="near-toggle" onClick={() => setShowNear(!showNear)}>
+          <div className={`tswitch${showNear?' on':''}`}><div className="tknob"/></div>
+          Show near-arbs
+        </div>
+      </div>
+
+      {firstLoad && loading ? (
+        <div className="cards">{[1,2,3].map(i=><div key={i} className="skel skel-card"/>)}</div>
+      ) : (
+        <>
+          <div className="sec-hdr">
+            Live Arbitrage Opportunities
+            {fArbs.length > 0 && <span className="sec-count">{fArbs.length}</span>}
+          </div>
+
+          {fArbs.length > 0
+            ? <div className="cards">{fArbs.map(o => <ArbCard key={o.id} opp={o} />)}</div>
+            : <div className="empty">
+                <div className="empty-icon">◎</div>
+                <div>No arbitrage opportunities{filter !== 'all' ? ` in ${FILTER_LB[filter]}` : ''} right now.</div>
+                <div style={{marginTop:6,fontSize:'0.7rem',color:'var(--dimmer)'}}>
+                  {pairs} pairs matched across {totalMkts.toLocaleString()} markets · refreshes every {REFRESH_SECS}s
+                </div>
+              </div>
+          }
+
+          {showNear && (
+            <div className="near-section">
+              <button className="near-hdr-btn" onClick={() => setNearOpen(!nearOpen)}>
+                <span className={`chev${nearOpen?' open':''}`}>▶</span>
+                Near-arbs ({fNear.length}) — within 2% of profitable
+              </button>
+              {nearOpen && fNear.length > 0 && (
+                <div className="cards">{fNear.map(o => <ArbCard key={o.id} opp={o} />)}</div>
+              )}
+              {nearOpen && fNear.length === 0 && (
+                <div style={{padding:'16px 0',fontSize:'0.72rem',color:'var(--dimmer)'}}>No near-arbs found.</div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
