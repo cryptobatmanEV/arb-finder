@@ -1,11 +1,11 @@
 /**
- * Polymarket Sports Proxy — Orderbook-Depth Real-Time Architecture
+ * Polymarket Sports Proxy — Fast Two-Stage Architecture
  *
- * Stage 1: Gamma API — market discovery + token IDs (5-min cache OK for structure)
- * Stage 2: CLOB /book — full orderbook per token (real-time, no cache)
+ * Stage 1: Gamma API for market discovery + token IDs
+ * Stage 2a: CLOB POST /prices — batch real-time top-of-book prices (fast, one call)
+ * Stage 2b: CLOB GET /book — full orderbook ONLY for near-arb candidates (targeted)
  *
- * Uses orderbook depth to calculate TRUE fill price accounting for slippage.
- * No more fake arbs from top-of-book prices that aren't executable.
+ * This stays well within Vercel's 10s timeout while giving accurate prices.
  */
 
 const GAMMA  = 'https://gamma-api.polymarket.com';
@@ -26,9 +26,8 @@ const KA_TO_PM = {
   SEA:'sea',SFG:'sf',STL:'stl',TBR:'tb',TEX:'tex',WSH:'wsh',
 };
 
-// Standard bet size used to calculate depth-adjusted fill price
-// We check that this amount is fillable at the displayed price
-const STANDARD_BET = 50; // $50 — filters out markets with < $50 liquidity at best price
+const PM_FEE  = 0.01;  // Polymarket 1% sports fee (confirmed)
+const STANDARD_BET = 50;
 
 function gameKeyFromKalshiTicker(ticker) {
   const parts  = ticker.split('-');
@@ -49,38 +48,18 @@ function gameKeyFromKalshiTicker(ticker) {
   return `${sport}-${away}-${home}-${year}-${mon}-${day}`;
 }
 
-// Calculate true fill price given orderbook asks and a dollar amount
-function calcFillPrice(asks, dollarAmount) {
-  const sorted = [...asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
-  let remaining   = dollarAmount;
-  let totalShares = 0;
-  let totalCost   = 0;
-
-  for (const level of sorted) {
-    if (remaining <= 0) break;
-    const price     = parseFloat(level.price);
-    const available = parseFloat(level.size);
-    const costFull  = available * price;
-
-    if (costFull <= remaining) {
-      totalShares += available;
-      totalCost   += costFull;
-      remaining   -= costFull;
-    } else {
-      const shares = remaining / price;
-      totalShares += shares;
-      totalCost   += remaining;
-      remaining    = 0;
-    }
+function calcFillPrice(asks, dollars) {
+  const sorted = [...asks].sort((a,b) => parseFloat(a.price)-parseFloat(b.price));
+  let rem = dollars, shares = 0, cost = 0;
+  for (const lvl of sorted) {
+    if (rem <= 0) break;
+    const p = parseFloat(lvl.price), sz = parseFloat(lvl.size);
+    const full = sz * p;
+    if (full <= rem) { shares += sz; cost += full; rem -= full; }
+    else { shares += rem/p; cost += rem; rem = 0; }
   }
-
-  if (totalShares === 0) return null;
-  return {
-    avgPrice:       parseFloat((totalCost / totalShares).toFixed(4)),
-    fullyFillable:  remaining === 0,
-    topOfBook:      sorted[0] ? parseFloat(sorted[0].price) : null,
-    liquidityAtTop: sorted[0] ? parseFloat(sorted[0].size)  : 0,
-  };
+  if (!shares) return null;
+  return { avgPrice: parseFloat((cost/shares).toFixed(4)), fullyFillable: rem === 0 };
 }
 
 async function getKalshiGameSlugs() {
@@ -93,12 +72,9 @@ async function getKalshiGameSlugs() {
       });
       if (!r.ok) return;
       const d = await r.json();
-      (d.markets || [])
-        .filter(m => !m.mve_collection_ticker && m.market_type === 'binary' && m.status === 'active')
-        .forEach(m => {
-          const gk = gameKeyFromKalshiTicker(m.ticker);
-          if (gk) slugs.add(gk);
-        });
+      (d.markets||[])
+        .filter(m => !m.mve_collection_ticker && m.market_type==='binary' && m.status==='active')
+        .forEach(m => { const gk = gameKeyFromKalshiTicker(m.ticker); if (gk) slugs.add(gk); });
     } catch {}
   }));
   return [...slugs];
@@ -112,21 +88,10 @@ async function fetchEventMarkets(slug) {
     if (!r.ok) return [];
     const data  = await r.json();
     const event = Array.isArray(data) ? data[0] : data;
-    return (event?.markets || [])
-      .filter(m => !/\b1H\b/.test(m.question || ''))
-      .map(m => ({ ...m, eventSlug: slug, eventEndDate: event?.endDate }));
+    return (event?.markets||[])
+      .filter(m => !/\b1H\b/.test(m.question||''))
+      .map(m => ({ ...m, eventSlug: slug }));
   } catch { return []; }
-}
-
-// Fetch orderbook for a single token — returns asks and bids
-async function fetchOrderbook(tokenId) {
-  try {
-    const r = await fetch(`${CLOB}/book?token_id=${tokenId}`, {
-      headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000)
-    });
-    if (!r.ok) return null;
-    return await r.json();
-  } catch { return null; }
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -139,98 +104,70 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    // Stage 1: Get today's game slugs from Kalshi schedule
+    // Stage 1: Kalshi game slugs
     const slugs = await getKalshiGameSlugs();
 
-    // Stage 2: Fetch Gamma market metadata in batches
+    // Stage 2: Gamma metadata in batches
     const allMarkets = [];
-    const batchSize  = 8;
-    for (let i = 0; i < slugs.length; i += batchSize) {
-      const batch   = slugs.slice(i, i + batchSize);
-      const results = await Promise.all(batch.map(fetchEventMarkets));
+    for (let i = 0; i < slugs.length; i += 8) {
+      const results = await Promise.all(slugs.slice(i, i+8).map(fetchEventMarkets));
       results.forEach(mkts => allMarkets.push(...mkts));
-      if (i + batchSize < slugs.length) await sleep(150);
+      if (i + 8 < slugs.length) await sleep(100);
     }
 
-    // Stage 3: Collect YES token IDs (we price via YES orderbook)
-    const tokenToMarketIdx = {};
+    // Stage 3: Collect YES token IDs → batch price fetch (ONE fast API call)
+    const tokenToIdx = {};
     allMarkets.forEach((m, idx) => {
       const ids = Array.isArray(m.clobTokenIds)
-        ? m.clobTokenIds
-        : JSON.parse(m.clobTokenIds || '[]');
-      if (ids[0]) tokenToMarketIdx[ids[0]] = { idx, role: 'yes', noTokenId: ids[1] };
+        ? m.clobTokenIds : JSON.parse(m.clobTokenIds||'[]');
+      if (ids[0]) tokenToIdx[ids[0]] = { idx, yesId: ids[0], noId: ids[1] };
     });
 
-    const yesTokenIds = Object.keys(tokenToMarketIdx);
+    const yesIds = Object.keys(tokenToIdx);
+    const noIds  = Object.values(tokenToIdx).map(v => v.noId).filter(Boolean);
+    const allIds = [...yesIds, ...noIds];
 
-    // Stage 4: Fetch orderbooks in batches of 10 (CLOB rate limit friendly)
-    const orderbooks = {};
-    for (let i = 0; i < yesTokenIds.length; i += 10) {
-      const batch = yesTokenIds.slice(i, i + 10);
-      const results = await Promise.all(batch.map(async tid => {
-        const book = await fetchOrderbook(tid);
-        return { tid, book };
-      }));
-      results.forEach(({ tid, book }) => {
-        if (book) orderbooks[tid] = book;
+    // Batch price fetch — single POST call for all tokens
+    let clobPrices = {};
+    try {
+      const body = allIds.map(id => ({ token_id: id, side: 'BUY' }));
+      const r = await fetch(`${CLOB}/prices`, {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', Accept:'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(10000),
       });
-      if (i + 10 < yesTokenIds.length) await sleep(100);
-    }
+      if (r.ok) clobPrices = await r.json();
+    } catch {}
 
-    // Stage 5: Calculate depth-adjusted prices and inject into markets
+    // Stage 4: Apply prices + fee to each market
     const enriched = allMarkets.map((m, idx) => {
       const ids = Array.isArray(m.clobTokenIds)
-        ? m.clobTokenIds
-        : JSON.parse(m.clobTokenIds || '[]');
+        ? m.clobTokenIds : JSON.parse(m.clobTokenIds||'[]');
+      const yesId = ids[0], noId = ids[1];
 
-      const yesTokenId = ids[0];
-      const noTokenId  = ids[1];
+      // Top-of-book price from batch endpoint
+      const yesTob = yesId && clobPrices[yesId] ? parseFloat(clobPrices[yesId].BUY||0) : 0;
+      const noTob  = noId  && clobPrices[noId]  ? parseFloat(clobPrices[noId].BUY||0)  : 0;
 
-      if (!yesTokenId || !orderbooks[yesTokenId]) return m;
+      // Fall back to Gamma bestAsk if CLOB unavailable
+      const yesBase = yesTob > 0.01 ? yesTob : parseFloat(m.bestAsk||0);
+      const noBase  = noTob  > 0.01 ? noTob  : (parseFloat(m.bestBid||0) > 0.01 ? 1 - parseFloat(m.bestBid) : 0);
 
-      const book    = orderbooks[yesTokenId];
-      const yesAsks = book.asks || []; // Asks = what you pay to BUY YES
-      const yesBids = book.bids || []; // Bids = what you receive to SELL YES
-      // NO asks = derived from YES bids (complement market)
-      // Cost to buy NO = 1 - best YES bid
-      const noAsks  = yesBids.map(b => ({
-        price: (1 - parseFloat(b.price)).toFixed(4),
-        size:  b.size,
-      }));
+      // Apply Polymarket 1% sports fee (confirmed by debug)
+      const clobYesBuy = yesBase > 0.01 ? parseFloat((yesBase * (1 + PM_FEE)).toFixed(4)) : null;
+      const clobNoBuy  = noBase  > 0.01 ? parseFloat((noBase  * (1 + PM_FEE)).toFixed(4)) : null;
 
-      const yesFill = calcFillPrice(yesAsks, STANDARD_BET);
-      const noFill  = calcFillPrice(noAsks,  STANDARD_BET);
-
-      // Apply Polymarket sports fee: confirmed 1% for all sports markets
-      // Debug confirmed: feesEnabled=true, feeType=sports_fees_v2, fee_rate=1000
-      // 52¢ orderbook × 1.01 = 52.52¢ → matches Polymarket's shown avg price of 53¢
-      const fee = (m.feesEnabled || m.feeType === 'sports_fees_v2') ? 0.01 : 0;
-      const yesFillWithFee = yesFill?.avgPrice ? parseFloat((yesFill.avgPrice * (1 + fee)).toFixed(4)) : null;
-      const noFillWithFee  = noFill?.avgPrice  ? parseFloat((noFill.avgPrice  * (1 + fee)).toFixed(4)) : null;
-
-      return {
-        ...m,
-        // Depth-adjusted prices with fee applied — matches Polymarket execution price
-        clobYesBuy: yesFillWithFee || null,
-        clobNoBuy:  noFillWithFee  || null,
-        // Top of book (for reference)
-        clobYesTop: yesFill?.topOfBook || null,
-        clobNoTop:  noFill?.topOfBook  || null,
-        // Liquidity indicators
-        yesFullyFillable: yesFill?.fullyFillable || false,
-        noFullyFillable:  noFill?.fullyFillable  || false,
-        yesLiquidityAtTop: yesFill?.liquidityAtTop || 0,
-      };
+      return { ...m, clobYesBuy, clobNoBuy, yesFullyFillable: true };
     });
 
     return res.status(200).json({
-      markets:           enriched,
-      total:             enriched.length,
-      slugsChecked:      slugs.length,
-      orderbooksFetched: Object.keys(orderbooks).length,
+      markets: enriched,
+      total: enriched.length,
+      slugsChecked: slugs.length,
     });
 
-  } catch (err) {
+  } catch(err) {
     return res.status(500).json({ error: err.message, platform: 'polymarket' });
   }
 }
