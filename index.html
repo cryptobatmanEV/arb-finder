@@ -477,12 +477,6 @@ const KA_TO_PM = {
   KC:'kc',KCR:'kc',KAN:'kc',LAA:'laa',LAD:'lad',NYM:'nym',NYY:'nyy',OAK:'oak',
   PHI:'phi',PIT:'pit',SDP:'sd',SEA:'sea',SFG:'sf',STL:'stl',TBR:'tb',
   TEX:'tex',WSH:'wsh',MIL:'mil',MIN:'min',DET:'det',HOU:'hou',MIA:'mia',
-  // NHL — added for VGK-UTA and all other NHL matchups
-  ANA:'ana',BUF:'buf',CAR:'car',CBJ:'cbj',CGY:'cgy',EDM:'edm',FLA:'fla',
-  LAK:'lak',MTL:'mtl',NJD:'njd',NSH:'nsh',NYI:'nyi',NYR:'nyr',
-  OTT:'ott',SJS:'sjs',TBL:'tbl',VAN:'van',VGK:'vgk',WPG:'wpg',
-  // Utah Hockey Club — Kalshi primary code is UTA (already mapped above via NBA), UTH = alias
-  UTH:'uta',
 };
 
 function gameKeyFromKalshiTicker(ticker) {
@@ -724,23 +718,6 @@ function extractKalshiStructure(m) {
   const yesFinal = yesRaw + kFee(yesRaw);
   const noFinal  = noRaw  + kFee(noRaw);
 
-  // Detect if game is currently live using expected_expiration_time.
-  // Kalshi markets expire at game end + small buffer (typically 3-5h after game start).
-  // Live window: [expiry - 4h, expiry + 30min] covers in-progress games for all sports.
-  // Fallback: if gameDate <= todayET and market still active, flag as live.
-  const isLive = (() => {
-    const exp = m.expected_expiration_time ? new Date(m.expected_expiration_time).getTime() : null;
-    if (exp) {
-      const now = Date.now();
-      return now >= exp - 4 * 3600_000 && now <= exp + 1800_000;
-    }
-    if (gameDate) {
-      const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-      return gameDate <= nowET.toISOString().slice(0, 10);
-    }
-    return false;
-  })();
-
   return {
     id: 'ka_' + ticker,
     platform: 'kalshi',
@@ -748,7 +725,6 @@ function extractKalshiStructure(m) {
     sport, gameKey, teams: teams || [], marketType, line,
     player, statType, gameDate: gameDate || null, isFutures: !!isFutures, winnerTeam,
     yesPrice: yesFinal, noPrice: noFinal || (1 - yesFinal),
-    isLive,
     url: `https://kalshi.com/markets/${ticker}`,
   };
 }
@@ -895,8 +871,7 @@ function calcArb(mA, mB) {
   const roi    = isArb ? (1 / denom - 1) * 100 : 0;
 
   // Build display title
-  const ABBR = {okc:'OKC',phx:'PHX',den:'DEN',min:'MIN',det:'DET',orl:'ORL',nyk:'NYK',atl:'ATL',bos:'BOS',mia:'MIA',mil:'MIL',sas:'SAS',por:'POR',lal:'LAL',lac:'LAC',gsw:'GSW',hou:'HOU',ind:'IND',cle:'CLE',chi:'CHI',tor:'TOR',phi:'PHI',mem:'MEM',nop:'NOP',sac:'SAC',dal:'DAL',uta:'UTA',was:'WAS',nyy:'NYY',nym:'NYM',lad:'LAD',laa:'LAA',chc:'CHC',cws:'CWS',stl:'STL',sd:'SD',sf:'SF',tex:'TEX',sea:'SEA',kc:'KC',oak:'OAK',bal:'BAL',tb:'TB',wsh:'WSH',col:'COL',ari:'ARI',pit:'PIT',cin:'CIN',
-    ana:'ANA',buf:'BUF',car:'CAR',cbj:'CBJ',cgy:'CGY',edm:'EDM',fla:'FLA',lak:'LAK',mtl:'MTL',njd:'NJD',nsh:'NSH',nyi:'NYI',nyr:'NYR',ott:'OTT',sjs:'SJS',tbl:'TBL',van:'VAN',vgk:'VGK',wpg:'WPG'};
+  const ABBR = {okc:'OKC',phx:'PHX',den:'DEN',min:'MIN',det:'DET',orl:'ORL',nyk:'NYK',atl:'ATL',bos:'BOS',mia:'MIA',mil:'MIL',sas:'SAS',por:'POR',lal:'LAL',lac:'LAC',gsw:'GSW',hou:'HOU',ind:'IND',cle:'CLE',chi:'CHI',tor:'TOR',phi:'PHI',mem:'MEM',nop:'NOP',sac:'SAC',dal:'DAL',uta:'UTA',was:'WAS',nyy:'NYY',nym:'NYM',lad:'LAD',laa:'LAA',chc:'CHC',cws:'CWS',stl:'STL',sd:'SD',sf:'SF',tex:'TEX',sea:'SEA',kc:'KC',oak:'OAK',bal:'BAL',tb:'TB',wsh:'WSH',col:'COL',ari:'ARI',pit:'PIT',cin:'CIN'};
   const title = mA.teams.length > 0
     ? mA.teams.map(t => ABBR[t] || t.toUpperCase()).join(' vs ')
     : mA.rawTitle;
@@ -911,10 +886,12 @@ function calcArb(mA, mB) {
     legA: {
       platform: mA.platform, outcome: best.oA, price: best.pA, stake: stakeA,
       rawTitle: best.oA === 'YES' ? (mA.rawTitle || mA.noTitle) : (mA.noTitle || mA.rawTitle),
+      rawPrice: best.oA === 'YES' ? mA.rawPrice : mA.rawNoPrice,
     },
     legB: {
       platform: mB.platform, outcome: best.oB, price: best.pB, stake: stakeB,
       rawTitle: best.oB === 'YES' ? (mB.rawTitle || mB.noTitle) : (mB.noTitle || mB.rawTitle),
+      rawPrice: best.oB === 'YES' ? mB.rawPrice : mB.rawNoPrice,
     },
     impliedSum: best.sum * 100,
     margin, profit, roi, isArb, isNear,
@@ -1062,44 +1039,19 @@ function extractNovigStructure(m) {
   // Teams from game
   const teams = [awayAbbr, homeAbbr].filter(Boolean);
 
-  // Build display rawTitle that humanOutcome() can parse to produce clean labels.
-  // Previously stored raw outcome descriptions ("SEA", "MIN") which humanOutcome
-  // couldn't parse → fell through to "Yes on this outcome" / "No on this outcome".
-  // Now we format titles to match humanOutcome's patterns (vs / spreadM / ouM / propOuM).
-  const awayName = game.awayTeam?.name || awayAbbr.toUpperCase();
-  const homeName = game.homeTeam?.name || homeAbbr.toUpperCase();
-  const competitorName = m.competitor?.name || '';
+  // Raw title for display
+  const rawTitle = title;
 
-  let displayRawTitle;
-  if (marketType === 'moneyline') {
-    // "Seattle Kraken vs Vegas Golden Knights" → humanOutcome vsM → "Seattle Kraken wins"
-    displayRawTitle = `${awayName} vs ${homeName}`;
-  } else if (marketType === 'spread') {
-    // "Oklahoma City wins by over 9.5 points?" → humanOutcome spreadM → "Oklahoma City covers 9.5"
-    // m.competitor = the team with the spread (favored team)
-    const favTeam = competitorName || awayName;
-    displayRawTitle = `${favTeam} wins by over ${Math.abs(line || 0)} points?`;
-  } else if (marketType === 'total') {
-    // "OKC vs PHX: O/U 215.5" → humanOutcome ouM → "Over 215.5" / "Under 215.5"
-    displayRawTitle = `${awayName} vs ${homeName}: O/U ${line}`;
-  } else if (marketType === 'prop' && player && line != null) {
-    // "Devin Booker: Assists O/U 4.5" → humanOutcome propOuM → "Booker over 4.5 Assists"
-    const STAT_LBL = {points:'Points',rebounds:'Rebounds',assists:'Assists',threes:'Threes',
-      steals:'Steals',blocks:'Blocks',strikeouts:'Strikeouts',homeruns:'Home Runs',hits:'Hits'};
-    const statLabel = STAT_LBL[statType] || statType || 'Stat';
-    const pName = player.split(' ').map(w => w[0].toUpperCase()+w.slice(1)).join(' ');
-    displayRawTitle = `${pName}: ${statLabel} O/U ${line}`;
-  } else {
-    displayRawTitle = yesOutcomeDesc || title || '';
-  }
+  // Use actual outcome description for display (not market.description which can be misleading)
+  // e.g. market.description = "PIT" but yesOutcomeDesc = "STL" (the away team we assigned YES)
+  const yesDesc = yesOutcomeDesc || rawTitle;
+  const noDesc  = noOutcomeDesc  || rawTitle;
 
   return {
     id: 'nv_' + m.id,
     platform: 'novig',
-    // Both rawTitle and noTitle are the same game description — humanOutcome uses
-    // the outcome param ("YES"/"NO") to determine which side to describe
-    rawTitle: displayRawTitle,
-    noTitle:  displayRawTitle,
+    rawTitle: yesDesc, // used for YES side display
+    noTitle: noDesc,   // used for NO side display
     sport, gameKey, teams, marketType, line,
     player, statType, gameDate,
     yesPrice, noPrice,
@@ -1162,7 +1114,7 @@ function OJLeg({ leg, stake }) {
       <div className="oj-odds">
         <span className="oj-american">{amer}</span>
         <span className="oj-decimal">{decimal}</span>
-        <span className="oj-cents">{fmt(leg.price * 100, 1)}¢</span>
+        <span className="oj-cents">{fmt(leg.price * 100, 1)}¢{leg.platform === 'kalshi' && leg.rawPrice ? <span title="Kalshi displayed price (pre-fee)" style={{opacity:0.55,fontSize:'0.78em',marginLeft:'3px'}}>({Math.round(leg.rawPrice*100)}¢ raw)</span> : null}</span>
       </div>
       <div className="oj-stake-line">
         <span className="oj-stake-val">{fmtUSD(stake)}</span>
