@@ -167,6 +167,51 @@ function normalizeEvent(ev, sport, debug) {
   return out;
 }
 
+function normalizeProphetXMarket(m, sport, debug) {
+  const home = m.home_team;
+  const away = m.away_team;
+  const startTime = m.commence_time;
+  const line = m.strike;
+  const overPrice = implied(m.over_price);
+  const underPrice = implied(m.under_price);
+  const marketType = String(m.market_type || '').toLowerCase();
+
+  if (!home || !away || !startTime) {
+    noteSkip(debug, 'prophetx_missing_event_fields');
+    return null;
+  }
+
+  // Verified from /v1/exchange/{sport_key}/markets?exchange=prophetx:
+  // market_type "Runs" has game teams, a strike, and over/under American odds.
+  if (marketType !== 'runs') {
+    noteSkip(debug, 'prophetx_unsupported_market_type');
+    return null;
+  }
+
+  if (line == null || !overPrice || !underPrice) {
+    noteSkip(debug, 'prophetx_missing_prices_or_line');
+    return null;
+  }
+
+  return {
+    id: `prophetx-${sport}-${away}-${home}-${startTime}-total-${line}`,
+    source: 'parlay',
+    platform: 'prophetx',
+    bookTitle: 'ProphetX',
+    sport: sportShort(sport),
+    marketType: 'total',
+    home,
+    away,
+    startTime,
+    line: Number(line),
+    yesPrice: overPrice,
+    noPrice: underPrice,
+    rawTitle: `${away} vs ${home}: O/U ${line}`,
+    noTitle: `${away} vs ${home}: O/U ${line}`,
+    url: googleUrl('ProphetX', away, home)
+  };
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
@@ -220,6 +265,44 @@ module.exports = async function handler(req, res) {
       }
 
       debug.push({ sport, ok: true, events: events.length });
+
+      const exchangeUrl = new URL(`${BASE}/exchange/${sport}/markets`);
+      exchangeUrl.searchParams.set('exchange', 'prophetx');
+
+      const xr = await fetch(exchangeUrl.toString(), {
+        headers: {
+          Accept: 'application/json',
+          'X-API-Key': API_KEY
+        }
+      });
+
+      const xText = await xr.text();
+
+      if (!xr.ok) {
+        debug.push({ sport, exchange: 'prophetx', ok: false, status: xr.status, body: xText.slice(0, 800) });
+        continue;
+      }
+
+      const xJson = JSON.parse(xText);
+      const exchangeRows = Array.isArray(xJson) ? xJson : (xJson.data || xJson.markets || []);
+      const normalizedExchange = exchangeRows
+        .map(m => normalizeProphetXMarket(m, sport, { skipped }))
+        .filter(Boolean);
+
+      normalizedExchange.forEach(m => {
+        booksSeen[m.platform] = m.bookTitle;
+        countsByBook[m.platform] = (countsByBook[m.platform] || 0) + 1;
+        countsBySport[m.sport] = (countsBySport[m.sport] || 0) + 1;
+      });
+      markets.push(...normalizedExchange);
+
+      debug.push({
+        sport,
+        exchange: 'prophetx',
+        ok: true,
+        markets: exchangeRows.length,
+        normalized: normalizedExchange.length
+      });
     }
 
     return res.status(200).json({
