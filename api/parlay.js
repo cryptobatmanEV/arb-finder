@@ -99,6 +99,14 @@ function implied(price) {
   return n > 0 ? 100 / (n + 100) : Math.abs(n) / (Math.abs(n) + 100);
 }
 
+function americanFromProbability(price) {
+  const p = Number(price);
+  if (!Number.isFinite(p) || p <= 0 || p >= 1) return null;
+  return p >= 0.5
+    ? -Math.round((p / (1 - p)) * 100)
+    : Math.round(((1 - p) / p) * 100);
+}
+
 function sportShort(sport) {
   if (sport === 'baseball_mlb') return 'mlb';
   if (sport === 'basketball_nba') return 'nba';
@@ -263,9 +271,8 @@ function normalizeExchangeMarket(exchangeKey, m, sport, debug) {
   const away = m.away_team;
   const startTime = m.commence_time;
   const line = m.strike;
-  const overPrice = implied(m.over_price);
-  const underPrice = implied(m.under_price);
   const marketType = String(m.market_type || '').toLowerCase();
+  const marketKey = String(m.market_key || '').toLowerCase();
   const platform = normalizeBookKey(exchangeKey || m.exchange);
   const bookTitle = EXCHANGE_TITLES[platform] || platform;
 
@@ -274,13 +281,20 @@ function normalizeExchangeMarket(exchangeKey, m, sport, debug) {
     return null;
   }
 
-  // Verified from /v1/exchange/{sport_key}/markets?exchange=prophetx:
-  // market_type "Runs" has game teams, a strike, and over/under American odds.
-  // Apply this same safe shape to any exchange row that exposes the same fields.
   if (marketType !== 'runs') {
     noteSkip(debug, 'exchange_unsupported_market_type');
     return null;
   }
+
+  // ProphetX currently returns market_type "Runs" with market_key "player_runs".
+  // That is not a verified game total, even though the row has home/away teams.
+  if (!['totals', 'total', 'game_total', 'game_totals'].includes(marketKey)) {
+    noteSkip(debug, `exchange_unsupported_market_key_${marketKey || 'missing'}`);
+    return null;
+  }
+
+  const overPrice = implied(m.over_price);
+  const underPrice = implied(m.under_price);
 
   if (line == null || !overPrice || !underPrice) {
     noteSkip(debug, 'exchange_missing_prices_or_line');
@@ -300,6 +314,16 @@ function normalizeExchangeMarket(exchangeKey, m, sport, debug) {
     line: Number(line),
     yesPrice: overPrice,
     noPrice: underPrice,
+    rawYesPrice: overPrice,
+    rawNoPrice: underPrice,
+    rawOverPrice: m.over_price ?? null,
+    rawUnderPrice: m.under_price ?? null,
+    overAmerican: americanFromProbability(overPrice),
+    underAmerican: americanFromProbability(underPrice),
+    marketKey: m.market_key || null,
+    exchangeMarketType: m.market_type || null,
+    exchangeLastUpdate: m.last_update || null,
+    exchangeVolumeUsd: m.volume_usd ?? null,
     rawTitle: `${away} vs ${home}: O/U ${line}`,
     noTitle: `${away} vs ${home}: O/U ${line}`,
     url: googleUrl(bookTitle, away, home)
@@ -345,7 +369,12 @@ function listFromPayload(payload) {
 
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
+  let forceFresh = false;
+  try {
+    const url = new URL(req.url || '', 'https://arb-finder.local');
+    forceFresh = url.searchParams.get('fresh') === '1';
+  } catch (_) {}
+  res.setHeader('Cache-Control', forceFresh ? 'no-store' : 's-maxage=300, stale-while-revalidate=600');
 
   if (!API_KEY) {
     return res.status(500).json({ error: 'PARLAY_API_KEY not set in Vercel' });

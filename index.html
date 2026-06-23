@@ -104,6 +104,7 @@
     .oj-stake-line { font-size: 0.72rem; margin-top: 4px; }
     .oj-stake-val { font-weight: 600; color: var(--green); }
     .oj-stake-lbl { color: var(--dim); }
+    .oj-debug { margin-top: 6px; font-size: 0.62rem; color: var(--dimmer); line-height: 1.45; word-break: break-word; }
     .card-date { font-size: 0.65rem; color: var(--dim); font-family: var(--mono); margin-left: 10px; font-weight: 400; }
 
     /* Calculator */
@@ -1012,11 +1013,13 @@ function calcArb(mA, mB) {
       platform: mA.platform, outcome: best.oA, price: best.pA, stake: stakeA,
       rawTitle: best.oA === 'YES' ? (mA.rawTitle || mA.noTitle) : (mA.noTitle || mA.rawTitle),
       rawPrice: best.oA === 'YES' ? mA.rawPrice : mA.rawNoPrice,
+      exchangeDebug: mA.exchangeDebug || null,
     },
     legB: {
       platform: mB.platform, outcome: best.oB, price: best.pB, stake: stakeB,
       rawTitle: best.oB === 'YES' ? (mB.rawTitle || mB.noTitle) : (mB.noTitle || mB.rawTitle),
       rawPrice: best.oB === 'YES' ? mB.rawPrice : mB.rawNoPrice,
+      exchangeDebug: mB.exchangeDebug || null,
     },
     impliedSum: best.sum * 100,
     margin, profit, roi, isArb, isNear,
@@ -1397,12 +1400,21 @@ function extractParlayStructure(m, debug = null) {
     noPrice,
     rawPrice: m.rawYesPrice || null,
     rawNoPrice: m.rawNoPrice || null,
+    exchangeDebug: platform === 'prophetx' ? {
+      lastUpdate: m.exchangeLastUpdate || null,
+      rawOverPrice: m.rawOverPrice ?? null,
+      rawUnderPrice: m.rawUnderPrice ?? null,
+      overAmerican: m.overAmerican ?? null,
+      underAmerican: m.underAmerican ?? null,
+      marketKey: m.marketKey || null,
+      strike: m.line ?? null
+    } : null,
     url: m.url || 'https://www.google.com/search?q=' + encodeURIComponent(`${PLAT_LB[platform] || platform} ${away} ${home} odds`),
     isLive: false,
   };
 }
 
-async function fetchParlay() {
+async function fetchParlay({ forceFresh = false } = {}) {
   const cached = localStorage.getItem('parlayMarketsCache');
   const cachedAt = Number(localStorage.getItem('parlayMarketsCacheAt') || 0);
   const fiveMin = 5 * 60 * 1000;
@@ -1435,11 +1447,11 @@ async function fetchParlay() {
     return normalized;
   };
 
-  if (cached && cachedAt && Date.now() - cachedAt < fiveMin) {
+  if (!forceFresh && cached && cachedAt && Date.now() - cachedAt < fiveMin) {
     try { return normalizeRaw(JSON.parse(cached), { fromCache: true }); } catch (_) {}
   }
 
-  const data = await fetchCachedRaw('/api/parlay');
+  const data = forceFresh ? await fetchRaw('/api/parlay?fresh=1') : await fetchCachedRaw('/api/parlay');
   const raw = data.markets || (Array.isArray(data) ? data : []);
   localStorage.setItem('parlayMarketsCache', JSON.stringify(raw));
   localStorage.setItem('parlayMarketsCacheAt', String(Date.now()));
@@ -1493,6 +1505,15 @@ function OJLeg({ leg, stake }) {
         <span className="oj-stake-val">{fmtUSD(stake)}</span>
         <span className="oj-stake-lbl"> to win {fmtUSD(ret)}</span>
       </div>
+      {leg.platform === 'prophetx' && leg.exchangeDebug && <ProphetXDebug debug={leg.exchangeDebug} />}
+    </div>
+  );
+}
+
+function ProphetXDebug({ debug }) {
+  return (
+    <div className="oj-debug">
+      ProphetX API last_update {debug.lastUpdate || 'n/a'} · raw O/U {String(debug.rawOverPrice ?? 'n/a')}/{String(debug.rawUnderPrice ?? 'n/a')} · converted {String(debug.overAmerican ?? 'n/a')}/{String(debug.underAmerican ?? 'n/a')} · market_key {debug.marketKey || 'n/a'} · strike {String(debug.strike ?? 'n/a')}
     </div>
   );
 }
@@ -1696,6 +1717,8 @@ function ArbLeg({ leg, stake, onStakeChange, label }) {
         <span className="oj-cents">{fmt(leg.price*100,1)}¢</span>
       </div>
 
+      {leg.platform === 'prophetx' && leg.exchangeDebug && <ProphetXDebug debug={leg.exchangeDebug} />}
+
       {/* Stake input */}
       <div className="oj-stake-wrap">
         <span className="oj-stake-label">Stake</span>
@@ -1815,7 +1838,7 @@ function App() {
     setParlayLoading(true);
     setStatus(prev => ({ ...prev, parlay:'loading' }));
     try {
-      const d = await fetchParlay();
+      const d = await fetchParlay({ forceFresh: true });
       parlayRef.current = d;
       const next = { ...baseMarkets, parlay: d };
       setMarkets(next);

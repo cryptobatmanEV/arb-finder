@@ -57,6 +57,17 @@ const SUPPORTED_EXCHANGE_CALLS = [
   { exchange: 'prophetx', sport: 'baseball_mlb' }
 ];
 
+const EXPANSION_CANDIDATE_SPORTS = [
+  { key: 'basketball_wnba', label: 'WNBA', matcher: 'team sport; needs team map if ParlayAPI exposes home_team/away_team' },
+  { key: 'americanfootball_ncaaf', label: 'NCAAF', matcher: 'team sport; needs college team normalization' },
+  { key: 'basketball_ncaab', label: 'NCAAB', matcher: 'team sport; needs college team normalization' },
+  { key: 'mma_mixed_martial_arts', label: 'UFC/MMA', matcher: 'fighter-vs-fighter; needs non-team matcher verification' },
+  { key: 'tennis', label: 'Tennis', matcher: 'player-vs-player; needs non-team matcher verification' },
+  { key: 'tennis_atp', label: 'ATP Tennis', matcher: 'player-vs-player; needs non-team matcher verification' },
+  { key: 'tennis_wta', label: 'WTA Tennis', matcher: 'player-vs-player; needs non-team matcher verification' },
+  { key: 'golf_pga_championship', label: 'Golf', matcher: 'usually outrights/player markets; not safe for current two-sided game matcher' }
+];
+
 const SPORT_EXCLUSION_REASONS = {
   basketball_wnba: 'not enabled yet; team normalization and active event coverage need scanner verification',
   americanfootball_ncaaf: 'seasonal; not enabled until current events can be verified without adding dead calls',
@@ -130,6 +141,8 @@ function compactRow(row) {
   return {
     rawKeys: Object.keys(row),
     id: row.id || row.event_id || row.market_id || null,
+    event_id: row.event_id || null,
+    market_id: row.market_id || null,
     key: row.key || row.exchange_key || row.bookmaker_key || row.id || null,
     title: row.title || row.name || row.display_name || null,
     source: row.source || row.exchange || row.bookmaker || null,
@@ -140,6 +153,9 @@ function compactRow(row) {
     line: row.line ?? row.point ?? row.strike ?? null,
     over_price: row.over_price ?? null,
     under_price: row.under_price ?? null,
+    volume_usd: row.volume_usd ?? null,
+    last_update: row.last_update || null,
+    is_consensus: row.is_consensus ?? null,
     commence_time: row.commence_time || row.start_time || row.startTime || null,
     home_team: row.home_team || row.home || null,
     away_team: row.away_team || row.away || null,
@@ -231,10 +247,13 @@ module.exports = async function handler(req, res) {
   }
 
   try {
+    const url = new URL(req.url || '', 'https://arb-finder.local');
+    const auditExpansion = url.searchParams.get('auditExpansion') === '1';
     const checks = [];
     const bookmakerSeen = {};
     const exchangeSeen = {};
     const exchangeMarketCounts = {};
+    const exchangeRowsInLookaheadWindow = {};
     const removedBooksSeen = {};
     const unsupportedBooksSeen = {};
     const timeWindow = buildTimeWindow(req);
@@ -254,6 +273,7 @@ module.exports = async function handler(req, res) {
       .map(row => row.key)
       .filter(Boolean)
       .sort();
+    const sportsByKey = new Map(sports.rows.map(row => [row.key, row]));
 
     for (const sport of SPORTS) {
       const odds = await callParlay(`/sports/${sport}/odds`, {
@@ -292,6 +312,8 @@ module.exports = async function handler(req, res) {
           raw: exchangeMarkets.rowCount,
           inLookaheadWindow: exchangeRowsInWindow.length
         };
+        if (!exchangeRowsInLookaheadWindow[exchangeKey]) exchangeRowsInLookaheadWindow[exchangeKey] = {};
+        exchangeRowsInLookaheadWindow[exchangeKey][sport] = exchangeRowsInWindow.map(compactRow);
 
         if (exchangeRowsInWindow.length > 0) {
           const exchangeMeta = exchangesAvailable.find(e => e.key === exchangeKey);
@@ -309,6 +331,65 @@ module.exports = async function handler(req, res) {
     const booksReturnedByParlay = [...bookmakersCurrentlySeen, ...exchangesCurrentlySeen]
       .filter((row, idx, arr) => arr.findIndex(other => other.key === row.key) === idx)
       .sort((a, b) => a.key.localeCompare(b.key));
+
+    const expansionAudit = [];
+    const propsAudit = [];
+    if (auditExpansion) {
+      for (const candidate of EXPANSION_CANDIDATE_SPORTS) {
+        const sportRow = sportsByKey.get(candidate.key);
+        if (!sportRow?.active) {
+          expansionAudit.push({
+            ...candidate,
+            active: !!sportRow?.active,
+            oddsChecked: false,
+            rowCount: 0,
+            creditHeaders: {},
+            supportAssessment: sportRow ? 'not active' : 'not returned by /v1/sports'
+          });
+          continue;
+        }
+
+        const odds = await callParlay(`/sports/${candidate.key}/odds`, {
+          regions: 'us',
+          markets: 'h2h,spreads,totals',
+          oddsFormat: 'american',
+          commenceTimeFrom: timeWindow.commenceTimeFrom,
+          commenceTimeTo: timeWindow.commenceTimeTo
+        });
+        checks.push(odds);
+        const rows = odds.rows.filter(row => inTimeWindow(row.commence_time, timeWindow));
+        const hasHomeAway = rows.some(row => row.home_team && row.away_team);
+        expansionAudit.push({
+          ...candidate,
+          active: true,
+          oddsChecked: true,
+          rowCount: rows.length,
+          rawRowCount: odds.rowCount,
+          creditHeaders: odds.creditHeaders,
+          sampleRows: rows.slice(0, 2).map(compactRow),
+          supportAssessment: hasHomeAway
+            ? `${candidate.matcher}; live rows expose home_team/away_team`
+            : `${candidate.matcher}; no verified home_team/away_team rows in the 5-day odds response`
+        });
+      }
+
+      for (const sport of SPORTS) {
+        const props = await callParlay(`/sports/${sport}/props`, {
+          regions: 'us',
+          oddsFormat: 'american',
+          commenceTimeFrom: timeWindow.commenceTimeFrom,
+          commenceTimeTo: timeWindow.commenceTimeTo
+        });
+        checks.push(props);
+        propsAudit.push({
+          sport,
+          rowCount: props.rows.length,
+          creditHeaders: props.creditHeaders,
+          sampleRows: props.rows.slice(0, 2).map(compactRow),
+          supportAssessment: 'not used by production scanner; player matching/stat normalization must be proven before enabling'
+        });
+      }
+    }
     const cleanChecks = checks.map(({ rows, ...check }) => check);
 
     return res.status(200).json({
@@ -344,6 +425,10 @@ module.exports = async function handler(req, res) {
       bookmakersMissing: setDiff(bookmakersAvailable, bookmakersCurrentlySeen),
       exchangesMissing: setDiff(exchangesAvailable, exchangesCurrentlySeen),
       exchangeMarketCounts,
+      exchangeRowsInLookaheadWindow,
+      expansionAuditEnabled: auditExpansion,
+      expansionAudit,
+      propsAudit,
       checks: cleanChecks
     });
   } catch (err) {
