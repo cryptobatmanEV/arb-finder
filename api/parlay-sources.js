@@ -135,7 +135,11 @@ module.exports = async function handler(req, res) {
       .filter(Boolean);
 
     for (const exchangeKey of exchangeKeys) {
-      checks.push(await callParlay(`/exchange/${encodeURIComponent(exchangeKey)}/markets`));
+      for (const sport of SPORTS) {
+        checks.push(await callParlay(`/exchange/${sport}/markets`, {
+          exchange: exchangeKey
+        }));
+      }
     }
 
     const allFoundRows = checks.flatMap(c => c.foundTargets || []);
