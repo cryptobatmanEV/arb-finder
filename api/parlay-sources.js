@@ -130,6 +130,8 @@ function compactRow(row) {
   return {
     rawKeys: Object.keys(row),
     id: row.id || row.event_id || row.market_id || null,
+    event_id: row.event_id || null,
+    market_id: row.market_id || null,
     key: row.key || row.exchange_key || row.bookmaker_key || row.id || null,
     title: row.title || row.name || row.display_name || null,
     source: row.source || row.exchange || row.bookmaker || null,
@@ -140,6 +142,9 @@ function compactRow(row) {
     line: row.line ?? row.point ?? row.strike ?? null,
     over_price: row.over_price ?? null,
     under_price: row.under_price ?? null,
+    volume_usd: row.volume_usd ?? null,
+    last_update: row.last_update || null,
+    is_consensus: row.is_consensus ?? null,
     commence_time: row.commence_time || row.start_time || row.startTime || null,
     home_team: row.home_team || row.home || null,
     away_team: row.away_team || row.away || null,
@@ -235,6 +240,7 @@ module.exports = async function handler(req, res) {
     const bookmakerSeen = {};
     const exchangeSeen = {};
     const exchangeMarketCounts = {};
+    const exchangeRowsInLookaheadWindow = {};
     const removedBooksSeen = {};
     const unsupportedBooksSeen = {};
     const timeWindow = buildTimeWindow(req);
@@ -292,6 +298,8 @@ module.exports = async function handler(req, res) {
           raw: exchangeMarkets.rowCount,
           inLookaheadWindow: exchangeRowsInWindow.length
         };
+        if (!exchangeRowsInLookaheadWindow[exchangeKey]) exchangeRowsInLookaheadWindow[exchangeKey] = {};
+        exchangeRowsInLookaheadWindow[exchangeKey][sport] = exchangeRowsInWindow.map(compactRow);
 
         if (exchangeRowsInWindow.length > 0) {
           const exchangeMeta = exchangesAvailable.find(e => e.key === exchangeKey);
@@ -344,6 +352,7 @@ module.exports = async function handler(req, res) {
       bookmakersMissing: setDiff(bookmakersAvailable, bookmakersCurrentlySeen),
       exchangesMissing: setDiff(exchangesAvailable, exchangesCurrentlySeen),
       exchangeMarketCounts,
+      exchangeRowsInLookaheadWindow,
       checks: cleanChecks
     });
   } catch (err) {
