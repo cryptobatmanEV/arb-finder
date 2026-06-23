@@ -1582,6 +1582,26 @@ function groupOpportunities(opps) {
   }).sort((a, b) => b.margin - a.margin);
 }
 
+function annotateOpportunities(opps) {
+  const groups = new Map();
+  (opps || []).forEach(opp => {
+    const key = groupedOppKey(opp);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(opp);
+  });
+  return (opps || []).map(opp => {
+    const group = groups.get(groupedOppKey(opp)) || [opp];
+    return {
+      ...opp,
+      groupedCount: group.length,
+      alternatives: {
+        legA: collectSideBooks(group, opp.legA),
+        legB: collectSideBooks(group, opp.legB)
+      }
+    };
+  });
+}
+
 function probToAmerican(p) {
   if (!p || p <= 0 || p >= 1) return '—';
   return p >= 0.5
@@ -1911,6 +1931,7 @@ function App() {
   const [sourceFilter, setSourceFilter] = useState('all');
   const [marketFilter, setMarketFilter] = useState('all');
   const [includeProps, setIncludeProps] = useState(false);
+  const [compactDuplicates, setCompactDuplicates] = useState(false);
   const [enabledBooks, setEnabledBooks] = useState(() => {
     try { return JSON.parse(localStorage.getItem('enabledBooks') || 'null') || ALL_BOOK_FILTERS; }
     catch (_) { return ALL_BOOK_FILTERS; }
@@ -2077,13 +2098,13 @@ function App() {
   const visibleOpp = (o) => visibleByBooks(o) && visibleBySource(o) && visibleByMarket(o);
   const fArbs = (filter === 'all' ? arbs : arbs.filter(a => a.sport === filter)).filter(visibleOpp);
   const fNear = (filter === 'all' ? near : near.filter(a => a.sport === filter)).filter(visibleOpp);
-  const groupedArbs = groupOpportunities(fArbs);
-  const groupedNear = groupOpportunities(fNear);
-  const shownOpps = [...groupedArbs, ...groupedNear];
+  const displayArbs = compactDuplicates ? groupOpportunities(fArbs) : annotateOpportunities(fArbs);
+  const displayNear = compactDuplicates ? groupOpportunities(fNear) : annotateOpportunities(fNear);
+  const shownOpps = [...displayArbs, ...displayNear];
   const shownSportsbookCards = shownOpps.filter(o => involvesPlatformSet(o, sportsbookSet)).length;
   const shownPairCounts = topEntries(countOppsByPlatform(shownOpps), 20);
   const totalMkts = Object.values(markets).reduce((s,m) => s + m.length, 0);
-  const bestM = groupedArbs.length > 0 ? groupedArbs[0].margin : null;
+  const bestM = displayArbs.length > 0 ? displayArbs[0].margin : null;
 
   const toggleBook = (book) => {
     setEnabledBooks(prev => prev.includes(book) ? prev.filter(b => b !== book) : [...prev, book]);
@@ -2123,11 +2144,11 @@ function App() {
       {!firstLoad && (
         <div className="stats-bar">
           <div className="stat">
-            <div className="stat-val" style={{color: groupedArbs.length > 0 ? 'var(--green)' : 'var(--dim)'}}>{groupedArbs.length}</div>
+            <div className="stat-val" style={{color: displayArbs.length > 0 ? 'var(--green)' : 'var(--dim)'}}>{displayArbs.length}</div>
             <div className="stat-lbl">Live Arbs</div>
           </div>
           <div className="stat">
-            <div className="stat-val" style={{color: groupedNear.length > 0 ? 'var(--yellow)' : 'var(--dim)'}}>{groupedNear.length}</div>
+            <div className="stat-val" style={{color: displayNear.length > 0 ? 'var(--yellow)' : 'var(--dim)'}}>{displayNear.length}</div>
             <div className="stat-lbl">Near-Arbs</div>
           </div>
           <div className="stat">
@@ -2154,6 +2175,10 @@ function App() {
         <div className="near-toggle" onClick={() => setShowNear(!showNear)}>
           <div className={`tswitch${showNear?' on':''}`}><div className="tknob"/></div>
           Show near-arbs
+        </div>
+        <div className="near-toggle" onClick={() => setCompactDuplicates(!compactDuplicates)}>
+          <div className={`tswitch${compactDuplicates?' on':''}`}><div className="tknob"/></div>
+          Compact duplicates
         </div>
       </div>
 
@@ -2228,11 +2253,11 @@ function App() {
         <>
           <div className="sec-hdr">
             Live Arbitrage Opportunities
-            {groupedArbs.length > 0 && <span className="sec-count">{groupedArbs.length}</span>}
+            {displayArbs.length > 0 && <span className="sec-count">{displayArbs.length}</span>}
           </div>
 
-          {groupedArbs.length > 0
-            ? <div className="cards">{groupedArbs.map(o => <ArbCard key={o.id} opp={o} />)}</div>
+          {displayArbs.length > 0
+            ? <div className="cards">{displayArbs.map(o => <ArbCard key={o.id} opp={o} />)}</div>
             : <div className="empty">
                 <div className="empty-icon">◎</div>
                 <div>No arbitrage opportunities{filter !== 'all' ? ` in ${FILTER_LB[filter]}` : ''} right now.</div>
@@ -2246,12 +2271,12 @@ function App() {
             <div className="near-section">
               <button className="near-hdr-btn" onClick={() => setNearOpen(!nearOpen)}>
                 <span className={`chev${nearOpen?' open':''}`}>▶</span>
-                Near-arbs ({groupedNear.length}) — within 2% of profitable
+                Near-arbs ({displayNear.length}) — within 2% of profitable
               </button>
-              {nearOpen && groupedNear.length > 0 && (
-                <div className="cards">{groupedNear.map(o => <ArbCard key={o.id} opp={o} />)}</div>
+              {nearOpen && displayNear.length > 0 && (
+                <div className="cards">{displayNear.map(o => <ArbCard key={o.id} opp={o} />)}</div>
               )}
-              {nearOpen && groupedNear.length === 0 && (
+              {nearOpen && displayNear.length === 0 && (
                 <div style={{padding:'16px 0',fontSize:'0.72rem',color:'var(--dimmer)'}}>No near-arbs found.</div>
               )}
             </div>
