@@ -195,6 +195,8 @@ const { useState, useEffect, useCallback } = React;
 const REFRESH_SECS = 60;
 const BASE_STAKE   = 100;
 const CORE_PLATFORMS = ['polymarket','kalshi','novig','fliff'];
+const SPORTSBOOK_PLATFORMS = ['draftkings','fanduel','betmgm','caesars','bovada','bet365','fanatics','hardrock','betrivers','pinnacle','stake','sugarhouse','tipico'];
+const EXCHANGE_PLATFORMS = ['prophetx','kalshi','polymarket'];
 // These are the actual platform keys returned by /api/parlay.
 // Keep these keys exact. Do not use display names or unverified aliases.
 const PARLAY_BOOKS = [
@@ -219,6 +221,8 @@ const PLAT_CLS = {
 };
 const FILTERS  = ['all','mlb','nba','nfl','nhl','crypto','other'];
 const FILTER_LB = { all:'All', mlb:'MLB', nba:'NBA', nfl:'NFL', nhl:'NHL', crypto:'Crypto', other:'Other' };
+const SOURCE_FILTERS = ['all','core','sportsbook','exchange'];
+const SOURCE_FILTER_LB = { all:'All', core:'Core only', sportsbook:'Sportsbook only', exchange:'Exchange only' };
 
 // ─── TEAM NORMALIZATION ───────────────────────────────────────────────────────
 const TEAM_MAP = {
@@ -1463,6 +1467,48 @@ const fmt    = (n, d=2) => (+n).toFixed(d);
 const fmtUSD = n => '$' + fmt(n, 2);
 const fmtPct = n => fmt(n, 2) + '%';
 
+function countByPlatform(markets) {
+  return (markets || []).reduce((acc, m) => {
+    const key = m.platform || 'unknown';
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+}
+
+function platformPairKey(a, b) {
+  return [a, b].sort().join(' vs ');
+}
+
+function countPairsByPlatform(pairs) {
+  return (pairs || []).reduce((acc, [a, b]) => {
+    const key = platformPairKey(a.platform, b.platform);
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+}
+
+function countOppsByPlatform(opps) {
+  return (opps || []).reduce((acc, opp) => {
+    const key = platformPairKey(opp.legA.platform, opp.legB.platform);
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+}
+
+function topEntries(obj, limit = 20) {
+  return Object.entries(obj || {})
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit);
+}
+
+function involvesPlatformSet(opp, set) {
+  return set.has(opp.legA.platform) || set.has(opp.legB.platform);
+}
+
+function bothPlatformsInSet(opp, set) {
+  return set.has(opp.legA.platform) && set.has(opp.legB.platform);
+}
+
 function probToAmerican(p) {
   if (!p || p <= 0 || p >= 1) return '—';
   return p >= 0.5
@@ -1756,6 +1802,7 @@ function App() {
   const [parlayUp, setParlayUp] = useState(null);
   const [countdown,setCdown]    = useState(REFRESH_SECS);
   const [filter,   setFilter]   = useState('all');
+  const [sourceFilter, setSourceFilter] = useState('all');
   const [enabledBooks, setEnabledBooks] = useState(() => {
     try { return JSON.parse(localStorage.getItem('enabledBooks') || 'null') || ALL_BOOK_FILTERS; }
     catch (_) { return ALL_BOOK_FILTERS; }
@@ -1782,13 +1829,18 @@ function App() {
     const matched = matchMarkets(allStructured);
     setPairs(matched.length);
     const parlayMatchedPairs = matched.filter(([mA, mB]) => mA.source === 'parlay' || mB.source === 'parlay').length;
+    const sportsbookSet = new Set(SPORTSBOOK_PLATFORMS);
+    const sportsbookPlatformsSeen = [...new Set((mkts.parlay || []).filter(m => sportsbookSet.has(m.platform)).map(m => m.platform))].sort();
+    const sportsbookMatchedPairs = matched.filter(([mA, mB]) => sportsbookSet.has(mA.platform) || sportsbookSet.has(mB.platform)).length;
 
     const arbList = [], nearList = [];
     let parlayArbOrNearPairs = 0;
+    let sportsbookArbOrNearPairs = 0;
     matched.forEach(([mA, mB]) => {
       const opp = calcArb(mA, mB);
       if (!opp) return;
       if (mA.source === 'parlay' || mB.source === 'parlay') parlayArbOrNearPairs += 1;
+      if (sportsbookSet.has(mA.platform) || sportsbookSet.has(mB.platform)) sportsbookArbOrNearPairs += 1;
       if (opp.isArb) arbList.push(opp);
       else if (opp.isNear) nearList.push(opp);
     });
@@ -1797,15 +1849,34 @@ function App() {
     nearList.sort((a,b) => b.margin - a.margin);
     setArbs(arbList);
     setNear(nearList);
+    const resultOpps = [...arbList, ...nearList];
+    const debugCounts = {
+      coreMarketsByPlatform: {
+        polymarket: mkts.polymarket.length,
+        kalshi: mkts.kalshi.length,
+        novig: mkts.novig.length,
+        fliff: mkts.fliff.length
+      },
+      parlayPlatformsSeen: Object.keys(countByPlatform(mkts.parlay)).sort(),
+      sportsbookPlatformsSeen,
+      sportsbookMarketsNormalized: (mkts.parlay || []).filter(m => sportsbookSet.has(m.platform)).length,
+      sportsbookMatchedPairs,
+      sportsbookArbOrNearPairs,
+      topMatchedPairsByPlatform: topEntries(countPairsByPlatform(matched), 20),
+      topResultCardsByPlatform: topEntries(countOppsByPlatform(resultOpps), 20),
+      sportsbookResultCardsTotal: resultOpps.filter(o => involvesPlatformSet(o, sportsbookSet)).length
+    };
     if (window.__PARLAY_DEBUG) {
       window.__PARLAY_DEBUG.matchedPairs = parlayMatchedPairs;
       window.__PARLAY_DEBUG.arbOrNearPairs = parlayArbOrNearPairs;
+      Object.assign(window.__PARLAY_DEBUG, debugCounts);
       console.info('[ParlayAPI] match debug', {
         matchedPairsInvolvingParlay: parlayMatchedPairs,
-        arbsOrNearArbsInvolvingParlay: parlayArbOrNearPairs
+        arbsOrNearArbsInvolvingParlay: parlayArbOrNearPairs,
+        ...debugCounts
       });
     }
-    return { parlayMatchedPairs, parlayArbOrNearPairs };
+    return { parlayMatchedPairs, parlayArbOrNearPairs, ...debugCounts };
   }, []);
 
   const refresh = useCallback(async () => {
@@ -1877,8 +1948,21 @@ function App() {
   }, [refresh]);
 
   const visibleByBooks = (o) => enabledBooks.includes(o.legA.platform) && enabledBooks.includes(o.legB.platform);
-  const fArbs = (filter === 'all' ? arbs : arbs.filter(a => a.sport === filter)).filter(visibleByBooks);
-  const fNear = (filter === 'all' ? near : near.filter(a => a.sport === filter)).filter(visibleByBooks);
+  const coreSet = new Set(CORE_PLATFORMS);
+  const sportsbookSet = new Set(SPORTSBOOK_PLATFORMS);
+  const exchangeSet = new Set(EXCHANGE_PLATFORMS);
+  const visibleBySource = (o) => {
+    if (sourceFilter === 'core') return bothPlatformsInSet(o, coreSet);
+    if (sourceFilter === 'sportsbook') return involvesPlatformSet(o, sportsbookSet);
+    if (sourceFilter === 'exchange') return involvesPlatformSet(o, exchangeSet);
+    return true;
+  };
+  const visibleOpp = (o) => visibleByBooks(o) && visibleBySource(o);
+  const fArbs = (filter === 'all' ? arbs : arbs.filter(a => a.sport === filter)).filter(visibleOpp);
+  const fNear = (filter === 'all' ? near : near.filter(a => a.sport === filter)).filter(visibleOpp);
+  const shownOpps = [...fArbs, ...fNear];
+  const shownSportsbookCards = shownOpps.filter(o => involvesPlatformSet(o, sportsbookSet)).length;
+  const shownPairCounts = topEntries(countOppsByPlatform(shownOpps), 20);
   const totalMkts = Object.values(markets).reduce((s,m) => s + m.length, 0);
   const bestM = fArbs.length > 0 ? fArbs[0].margin : null;
 
@@ -1954,6 +2038,14 @@ function App() {
         </div>
       </div>
 
+      <div className="filters" style={{marginTop:'-10px'}}>
+        {SOURCE_FILTERS.map(f => (
+          <button key={f} className={`fbtn${sourceFilter===f?' active':''}`} onClick={() => setSourceFilter(f)}>
+            {SOURCE_FILTER_LB[f]}
+          </button>
+        ))}
+      </div>
+
       <div className="book-filters">
         <div className="book-filter-title">
           Books shown in results
@@ -1975,6 +2067,16 @@ function App() {
           Parlay debug: raw {parlayDebug.rawCount?.toLocaleString?.() || 0} · normalized {parlayDebug.normalizedCount?.toLocaleString?.() || 0} ·
           missing teams {parlayDebug.dropped?.missing_team_abbreviation || 0} · invalid prices {parlayDebug.dropped?.missing_invalid_prices || 0} ·
           Parlay matched pairs {parlayDebug.parlayMatchedPairs || parlayDebug.matchedPairs || 0} · arbs/near-arbs {parlayDebug.parlayArbOrNearPairs || parlayDebug.arbOrNearPairs || 0}
+        </div>
+      )}
+
+      {parlayDebug && (
+        <div className="countdown" style={{margin:'-10px 0 18px'}}>
+          Sportsbook debug: platforms {(parlayDebug.sportsbookPlatformsSeen || []).join(', ') || 'none'} Â· normalized {parlayDebug.sportsbookMarketsNormalized || 0} Â· matched pairs {parlayDebug.sportsbookMatchedPairs || 0} Â· result cards shown {shownSportsbookCards}
+          <br />
+          Top matched pairs: {(parlayDebug.topMatchedPairsByPlatform || []).map(([k,v]) => `${k}: ${v}`).join(' | ') || 'none'}
+          <br />
+          Cards shown by pair: {shownPairCounts.map(([k,v]) => `${k}: ${v}`).join(' | ') || 'none'}
         </div>
       )}
 
