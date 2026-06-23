@@ -15,6 +15,12 @@ const EXCHANGE_TITLES = {
   prophetx: 'ProphetX'
 };
 
+const SUPPORTED_EXCHANGE_CALLS = [
+  // Verified useful on 2026-06-23:
+  // /v1/exchange/baseball_mlb/markets?exchange=prophetx returns MLB game totals.
+  { exchange: 'prophetx', sport: 'baseball_mlb' }
+];
+
 function implied(price) {
   const n = Number(price);
   if (!Number.isFinite(n)) return null;
@@ -271,34 +277,7 @@ module.exports = async function handler(req, res) {
     const skipped = {};
     const countsByBook = {};
     const countsBySport = {};
-    const exchangeTitles = {};
     const exchangesSeen = {};
-    const exchangeList = await fetchJson('/exchanges');
-    let exchangeKeys = [];
-
-    if (exchangeList.response.ok) {
-      exchangeKeys = listFromPayload(exchangeList.json)
-        .map(e => {
-          const key = normalizeBookKey(e.key || e.exchange_key || e.id);
-          if (key) exchangeTitles[key] = e.title || e.name || EXCHANGE_TITLES[key] || key;
-          return key;
-        })
-        .filter(Boolean);
-      debug.push({
-        endpoint: '/exchanges',
-        ok: true,
-        exchanges: exchangeKeys,
-        creditHeaders: creditHeaders(exchangeList.response.headers)
-      });
-    } else {
-      debug.push({
-        endpoint: '/exchanges',
-        ok: false,
-        status: exchangeList.response.status,
-        body: exchangeList.text.slice(0, 800),
-        creditHeaders: creditHeaders(exchangeList.response.headers)
-      });
-    }
 
     for (const sport of SPORTS) {
       const oddsResult = await fetchJson(`/sports/${sport}/odds`, {
@@ -346,7 +325,9 @@ module.exports = async function handler(req, res) {
         creditHeaders: creditHeaders(r.headers)
       });
 
-      for (const exchangeKey of exchangeKeys) {
+      const exchangeCalls = SUPPORTED_EXCHANGE_CALLS.filter(call => call.sport === sport);
+
+      for (const { exchange: exchangeKey } of exchangeCalls) {
         const exchangeResult = await fetchJson(`/exchange/${sport}/markets`, {
           exchange: exchangeKey
         });
@@ -372,7 +353,7 @@ module.exports = async function handler(req, res) {
           .filter(Boolean);
 
         normalizedExchange.forEach(m => {
-          booksSeen[m.platform] = m.bookTitle || exchangeTitles[m.platform] || m.platform;
+          booksSeen[m.platform] = m.bookTitle || EXCHANGE_TITLES[m.platform] || m.platform;
           exchangesSeen[m.platform] = booksSeen[m.platform];
           countsByBook[m.platform] = (countsByBook[m.platform] || 0) + 1;
           countsBySport[m.sport] = (countsBySport[m.sport] || 0) + 1;
@@ -395,7 +376,7 @@ module.exports = async function handler(req, res) {
       markets,
       count: markets.length,
       booksSeen,
-      exchangesAvailable: exchangeTitles,
+      supportedExchangeCalls: SUPPORTED_EXCHANGE_CALLS,
       exchangesSeen,
       countsByBook,
       countsBySport,
