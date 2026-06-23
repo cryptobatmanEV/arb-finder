@@ -194,8 +194,68 @@ function summarizeOddsRows(rows) {
   };
 }
 
+function firstEventDetails(rows) {
+  const first = rows?.[0];
+  if (!first) {
+    return {
+      first3EventNamesAndTimes: [],
+      firstEventFirst3Bookmakers: [],
+      firstBookmakerMarkets: []
+    };
+  }
+
+  return {
+    first3EventNamesAndTimes: rows.slice(0, 3).map(row => ({
+      id: row.id || null,
+      commence_time: row.commence_time || null,
+      away_team: row.away_team || null,
+      home_team: row.home_team || null,
+      title: row.title || row.name || `${row.away_team || ''} @ ${row.home_team || ''}`.trim()
+    })),
+    firstEventFirst3Bookmakers: (first.bookmakers || []).slice(0, 3).map(book => ({
+      key: book.key || null,
+      title: book.title || book.name || null,
+      marketKeys: (book.markets || []).map(market => market.key)
+    })),
+    firstBookmakerMarkets: (first.bookmakers?.[0]?.markets || []).map(market => ({
+      key: market.key,
+      outcomes: (market.outcomes || []).slice(0, 4).map(outcome => ({
+        name: outcome.name,
+        price: outcome.price,
+        point: outcome.point ?? null
+      }))
+    }))
+  };
+}
+
+function summarizeMlbShapeCall(label, call) {
+  return {
+    label,
+    endpoint: call.endpoint,
+    query: call.query,
+    status: call.status,
+    ok: call.ok,
+    errorText: call.errorText,
+    creditHeaders: call.creditHeaders,
+    ...summarizeOddsRows(call.rows),
+    ...firstEventDetails(call.rows)
+  };
+}
+
+function isoNoMilliseconds(value) {
+  return new Date(value).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+function dateOnly(value) {
+  return new Date(value).toISOString().slice(0, 10);
+}
+
 async function callParlay(path, params = {}) {
   const url = new URL(`${BASE}${path}`);
+  return callParlayUrl(url, path, params);
+}
+
+async function callParlayUrl(url, endpoint, params = {}) {
   Object.entries(params).forEach(([key, value]) => {
     if (value != null && value !== '') url.searchParams.set(key, value);
   });
@@ -215,11 +275,12 @@ async function callParlay(path, params = {}) {
   const rows = listFromPayload(payload);
 
   return {
-    endpoint: path,
+    endpoint,
     query: params,
     status: r.status,
     ok: r.ok,
     creditHeaders: interestingHeaders(r.headers),
+    payloadTopLevelKeys: payload && typeof payload === 'object' && !Array.isArray(payload) ? Object.keys(payload) : [],
     rowCount: rows.length,
     countsByMarketKey: countBy(rows, 'market_key'),
     countsByMarketType: countBy(rows, 'market_type'),
@@ -276,6 +337,7 @@ module.exports = async function handler(req, res) {
     const url = new URL(req.url || '', 'https://arb-finder.local');
     const auditExpansion = url.searchParams.get('auditExpansion') === '1';
     const auditInventory = url.searchParams.get('auditInventory') === '1';
+    const auditMlbShapes = url.searchParams.get('auditMlbShapes') === '1';
     const checks = [];
     const bookmakerSeen = {};
     const exchangeSeen = {};
@@ -301,6 +363,91 @@ module.exports = async function handler(req, res) {
       .filter(Boolean)
       .sort();
     const sportsByKey = new Map(sports.rows.map(row => [row.key, row]));
+
+    const mlbShapeAudit = [];
+    if (auditMlbShapes) {
+      const mlbSportRows = sports.rows
+        .filter(row => /baseball|mlb|major league/i.test(`${row.key || ''} ${row.title || ''} ${row.group || ''} ${row.description || ''}`))
+        .map(compactRow);
+      const alternateBaseballKeys = mlbSportRows
+        .map(row => row.key)
+        .filter(key => key && key !== 'baseball_mlb');
+
+      const fromIsoMs = timeWindow.commenceTimeFrom;
+      const toIsoMs = timeWindow.commenceTimeTo;
+      const fromIsoNoMs = isoNoMilliseconds(timeWindow.fromMs);
+      const toIsoNoMs = isoNoMilliseconds(timeWindow.toMs);
+      const fromDate = dateOnly(timeWindow.fromMs);
+      const toDate = dateOnly(timeWindow.toMs);
+
+      const shapeCases = [
+        ['A no params except oddsFormat', { oddsFormat: 'american' }],
+        ['B region only', { regions: 'us', oddsFormat: 'american' }],
+        ['C market h2h only', { markets: 'h2h', oddsFormat: 'american' }],
+        ['C market spreads only', { markets: 'spreads', oddsFormat: 'american' }],
+        ['C market totals only', { markets: 'totals', oddsFormat: 'american' }],
+        ['D all markets no region', { markets: 'h2h,spreads,totals', oddsFormat: 'american' }],
+        ['E region h2h', { regions: 'us', markets: 'h2h', oddsFormat: 'american' }],
+        ['E region spreads', { regions: 'us', markets: 'spreads', oddsFormat: 'american' }],
+        ['E region totals', { regions: 'us', markets: 'totals', oddsFormat: 'american' }],
+        ['F region all markets', { regions: 'us', markets: 'h2h,spreads,totals', oddsFormat: 'american' }],
+        ['F region all markets include live', { regions: 'us', markets: 'h2h,spreads,totals', oddsFormat: 'american', include_live: 'true' }],
+        ['F region all markets live only', { regions: 'us', markets: 'h2h,spreads,totals', oddsFormat: 'american', live: 'true' }],
+        ['G date only ISO milliseconds', { oddsFormat: 'american', commenceTimeFrom: fromIsoMs, commenceTimeTo: toIsoMs }],
+        ['H region all markets date ISO milliseconds', { regions: 'us', markets: 'h2h,spreads,totals', oddsFormat: 'american', commenceTimeFrom: fromIsoMs, commenceTimeTo: toIsoMs }],
+        ['H region all markets date ISO milliseconds include live', { regions: 'us', markets: 'h2h,spreads,totals', oddsFormat: 'american', include_live: 'true', commenceTimeFrom: fromIsoMs, commenceTimeTo: toIsoMs }],
+        ['H region all markets date ISO milliseconds live only', { regions: 'us', markets: 'h2h,spreads,totals', oddsFormat: 'american', live: 'true', commenceTimeFrom: fromIsoMs, commenceTimeTo: toIsoMs }],
+        ['H region all markets date ISO no milliseconds', { regions: 'us', markets: 'h2h,spreads,totals', oddsFormat: 'american', commenceTimeFrom: fromIsoNoMs, commenceTimeTo: toIsoNoMs }],
+        ['H region all markets date only', { regions: 'us', markets: 'h2h,spreads,totals', oddsFormat: 'american', commenceTimeFrom: fromDate, commenceTimeTo: toDate }]
+      ];
+
+      const bookmakerKeysToTest = ['draftkings', 'fanduel', 'betmgm', 'caesars', 'bovada', 'pinnacle'];
+      for (const bookmaker of bookmakerKeysToTest) {
+        shapeCases.push(
+          [`bookmaker ${bookmaker} h2h no region`, { bookmakers: bookmaker, markets: 'h2h', oddsFormat: 'american' }],
+          [`bookmaker ${bookmaker} h2h include live`, { bookmakers: bookmaker, markets: 'h2h', oddsFormat: 'american', include_live: 'true' }],
+          [`bookmaker ${bookmaker} h2h live only`, { bookmakers: bookmaker, markets: 'h2h', oddsFormat: 'american', live: 'true' }],
+          [`bookmaker ${bookmaker} h2h with region`, { regions: 'us', bookmakers: bookmaker, markets: 'h2h', oddsFormat: 'american' }],
+          [`bookmaker ${bookmaker} no market no region`, { bookmakers: bookmaker, oddsFormat: 'american' }],
+          [`bookmaker ${bookmaker} no market with region`, { regions: 'us', bookmakers: bookmaker, oddsFormat: 'american' }]
+        );
+      }
+
+      for (const [label, params] of shapeCases) {
+        const result = await callParlay('/sports/baseball_mlb/odds', params);
+        checks.push(result);
+        mlbShapeAudit.push(summarizeMlbShapeCall(label, result));
+      }
+
+      for (const sportKey of alternateBaseballKeys) {
+        const result = await callParlay(`/sports/${sportKey}/odds`, { oddsFormat: 'american' });
+        checks.push(result);
+        mlbShapeAudit.push(summarizeMlbShapeCall(`alternate baseball key ${sportKey} oddsFormat only`, result));
+      }
+
+      const openApi = await callParlayUrl(new URL('https://parlay-api.com/openapi.json'), '/openapi.json');
+      checks.push(openApi);
+
+      return res.status(200).json({
+        ok: true,
+        pulledAt: new Date().toISOString(),
+        currentLookaheadDays: timeWindow.lookaheadDays,
+        timeWindow: {
+          commenceTimeFrom: timeWindow.commenceTimeFrom,
+          commenceTimeTo: timeWindow.commenceTimeTo,
+          commenceTimeFromNoMilliseconds: fromIsoNoMs,
+          commenceTimeToNoMilliseconds: toIsoNoMs,
+          commenceDateFrom: fromDate,
+          commenceDateTo: toDate
+        },
+        mlbSportRows,
+        openApiStatus: openApi.status,
+        openApiCreditHeaders: openApi.creditHeaders,
+        openApiTopLevelKeys: openApi.payloadTopLevelKeys,
+        audit: mlbShapeAudit,
+        checks: checks.map(({ rows, ...check }) => check)
+      });
+    }
 
     const inventoryAudit = [];
     if (auditInventory) {
