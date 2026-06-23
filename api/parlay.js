@@ -10,6 +10,48 @@ const SPORTS = [
   'icehockey_nhl'
 ];
 
+const FINAL_BOOK_KEYS = [
+  'draftkings',
+  'fanduel',
+  'betmgm',
+  'caesars',
+  'bovada',
+  'bet365',
+  'fanatics',
+  'hardrock',
+  'betrivers',
+  'pinnacle',
+  'kalshi',
+  'novig',
+  'polymarket',
+  'fliff',
+  'prophetx',
+  'stake',
+  'sugarhouse',
+  'tipico'
+];
+
+const REMOVED_BOOK_KEYS = [
+  'betclic',
+  'betrivers_ca',
+  'bwin',
+  'maverick_games',
+  'parlayplay',
+  'parx',
+  'pick6',
+  'pmu',
+  'prizepicks',
+  'rushbet',
+  'sleeper',
+  'underdog',
+  'unibet_be',
+  'unibet_nl',
+  'winamax'
+];
+
+const FINAL_BOOK_SET = new Set(FINAL_BOOK_KEYS);
+const REMOVED_BOOK_SET = new Set(REMOVED_BOOK_KEYS);
+
 const EXCHANGE_TITLES = {
   novig: 'Novig',
   prophetx: 'ProphetX'
@@ -20,6 +62,36 @@ const SUPPORTED_EXCHANGE_CALLS = [
   // /v1/exchange/baseball_mlb/markets?exchange=prophetx returns MLB game totals.
   { exchange: 'prophetx', sport: 'baseball_mlb' }
 ];
+
+function getLookaheadDays(req) {
+  const fallback = Number(process.env.PARLAY_LOOKAHEAD_DAYS || 5);
+  let queryDays = null;
+  try {
+    const url = new URL(req.url || '', 'https://arb-finder.local');
+    queryDays = url.searchParams.get('days');
+  } catch (_) {}
+  const raw = queryDays != null ? Number(queryDays) : fallback;
+  if (!Number.isFinite(raw) || raw <= 0) return 5;
+  return Math.min(Math.max(Math.floor(raw), 1), 30);
+}
+
+function buildTimeWindow(req) {
+  const lookaheadDays = getLookaheadDays(req);
+  const fromMs = Date.now();
+  const toMs = fromMs + lookaheadDays * 24 * 60 * 60 * 1000;
+  return {
+    lookaheadDays,
+    fromMs,
+    toMs,
+    commenceTimeFrom: new Date(fromMs).toISOString(),
+    commenceTimeTo: new Date(toMs).toISOString()
+  };
+}
+
+function inTimeWindow(startTime, timeWindow) {
+  const startMs = new Date(startTime || '').getTime();
+  return Number.isFinite(startMs) && startMs >= timeWindow.fromMs && startMs <= timeWindow.toMs;
+}
 
 function implied(price) {
   const n = Number(price);
@@ -64,6 +136,14 @@ function normalizeEvent(ev, sport, debug) {
     const bookTitle = book.title || book.key;
     if (!platform) {
       noteSkip(debug, 'missing_book_key');
+      continue;
+    }
+    if (REMOVED_BOOK_SET.has(platform)) {
+      noteSkip(debug, `excluded_book_${platform}`);
+      continue;
+    }
+    if (!FINAL_BOOK_SET.has(platform)) {
+      noteSkip(debug, `unsupported_book_${platform}`);
       continue;
     }
 
@@ -255,6 +335,7 @@ async function fetchJson(path, params = {}) {
 
 function listFromPayload(payload) {
   if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.value)) return payload.value;
   if (Array.isArray(payload?.data)) return payload.data;
   if (Array.isArray(payload?.exchanges)) return payload.exchanges;
   if (Array.isArray(payload?.markets)) return payload.markets;
@@ -278,12 +359,15 @@ module.exports = async function handler(req, res) {
     const countsByBook = {};
     const countsBySport = {};
     const exchangesSeen = {};
+    const timeWindow = buildTimeWindow(req);
 
     for (const sport of SPORTS) {
       const oddsResult = await fetchJson(`/sports/${sport}/odds`, {
         regions: 'us',
         markets: 'h2h,spreads,totals',
-        oddsFormat: 'american'
+        oddsFormat: 'american',
+        commenceTimeFrom: timeWindow.commenceTimeFrom,
+        commenceTimeTo: timeWindow.commenceTimeTo
       });
 
       const r = oddsResult.response;
@@ -302,7 +386,8 @@ module.exports = async function handler(req, res) {
       }
 
       const json = oddsResult.json;
-      const events = Array.isArray(json) ? json : (json.data || json.events || []);
+      const allEvents = Array.isArray(json) ? json : (json.data || json.events || []);
+      const events = allEvents.filter(ev => inTimeWindow(ev.commence_time, timeWindow));
 
       for (const ev of events) {
         for (const b of ev.bookmakers || []) {
@@ -322,6 +407,7 @@ module.exports = async function handler(req, res) {
         endpoint: `/sports/${sport}/odds`,
         ok: true,
         events: events.length,
+        rawEvents: allEvents.length,
         creditHeaders: creditHeaders(r.headers)
       });
 
@@ -347,7 +433,8 @@ module.exports = async function handler(req, res) {
           continue;
         }
 
-        const exchangeRows = listFromPayload(exchangeResult.json);
+        const allExchangeRows = listFromPayload(exchangeResult.json);
+        const exchangeRows = allExchangeRows.filter(row => inTimeWindow(row.commence_time, timeWindow));
         const normalizedExchange = exchangeRows
           .map(m => normalizeExchangeMarket(exchangeKey, m, sport, { skipped }))
           .filter(Boolean);
@@ -366,6 +453,7 @@ module.exports = async function handler(req, res) {
           exchange: exchangeKey,
           ok: true,
           markets: exchangeRows.length,
+          rawMarkets: allExchangeRows.length,
           normalized: normalizedExchange.length,
           creditHeaders: creditHeaders(xr.headers)
         });
@@ -376,6 +464,15 @@ module.exports = async function handler(req, res) {
       markets,
       count: markets.length,
       booksSeen,
+      finalBookKeys: FINAL_BOOK_KEYS,
+      removedBookKeys: REMOVED_BOOK_KEYS,
+      timeWindow: {
+        lookaheadDays: timeWindow.lookaheadDays,
+        commenceTimeFrom: timeWindow.commenceTimeFrom,
+        commenceTimeTo: timeWindow.commenceTimeTo,
+        oddsCommenceTimeFiltering: 'upstream_and_server_side',
+        exchangeCommenceTimeFiltering: 'server_side_only'
+      },
       supportedExchangeCalls: SUPPORTED_EXCHANGE_CALLS,
       exchangesSeen,
       countsByBook,
