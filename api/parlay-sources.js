@@ -11,10 +11,95 @@ const SPORTS = [
   'icehockey_nhl'
 ];
 
+const FINAL_BOOK_KEYS = [
+  'draftkings',
+  'fanduel',
+  'betmgm',
+  'caesars',
+  'bovada',
+  'bet365',
+  'fanatics',
+  'hardrock',
+  'betrivers',
+  'pinnacle',
+  'kalshi',
+  'novig',
+  'polymarket',
+  'fliff',
+  'prophetx',
+  'stake',
+  'sugarhouse',
+  'tipico'
+];
+
+const REMOVED_BOOK_KEYS = [
+  'betclic',
+  'betrivers_ca',
+  'bwin',
+  'maverick_games',
+  'parlayplay',
+  'parx',
+  'pick6',
+  'pmu',
+  'prizepicks',
+  'rushbet',
+  'sleeper',
+  'underdog',
+  'unibet_be',
+  'unibet_nl',
+  'winamax'
+];
+
+const FINAL_BOOK_SET = new Set(FINAL_BOOK_KEYS);
+const REMOVED_BOOK_SET = new Set(REMOVED_BOOK_KEYS);
+
+const SUPPORTED_EXCHANGE_CALLS = [
+  { exchange: 'prophetx', sport: 'baseball_mlb' }
+];
+
+const SPORT_EXCLUSION_REASONS = {
+  basketball_wnba: 'not enabled yet; team normalization and active event coverage need scanner verification',
+  americanfootball_ncaaf: 'seasonal; not enabled until current events can be verified without adding dead calls',
+  basketball_ncaab: 'seasonal; not enabled until current events can be verified without adding dead calls',
+  mma_mixed_martial_arts: 'not enabled; fighter-vs-fighter normalization needs explicit matcher support',
+  tennis_atp: 'not enabled; player-vs-player normalization needs explicit matcher support',
+  tennis_wta: 'not enabled; player-vs-player normalization needs explicit matcher support'
+};
+
+function getLookaheadDays(req) {
+  const fallback = Number(process.env.PARLAY_LOOKAHEAD_DAYS || 5);
+  let queryDays = null;
+  try {
+    const url = new URL(req.url || '', 'https://arb-finder.local');
+    queryDays = url.searchParams.get('days');
+  } catch (_) {}
+  const raw = queryDays != null ? Number(queryDays) : fallback;
+  if (!Number.isFinite(raw) || raw <= 0) return 5;
+  return Math.min(Math.max(Math.floor(raw), 1), 30);
+}
+
+function buildTimeWindow(req) {
+  const lookaheadDays = getLookaheadDays(req);
+  const fromMs = Date.now();
+  const toMs = fromMs + lookaheadDays * 24 * 60 * 60 * 1000;
+  return {
+    lookaheadDays,
+    fromMs,
+    toMs,
+    commenceTimeFrom: new Date(fromMs).toISOString(),
+    commenceTimeTo: new Date(toMs).toISOString()
+  };
+}
+
+function inTimeWindow(startTime, timeWindow) {
+  const startMs = new Date(startTime || '').getTime();
+  return Number.isFinite(startMs) && startMs >= timeWindow.fromMs && startMs <= timeWindow.toMs;
+}
+
 function interestingHeaders(headers) {
   const out = {};
   headers.forEach((value, key) => {
-    if (/credit|request|usage|remaining|used|cost|quota/i.test(key)) {
+    if (/credit|request|usage|remaining|used|cost|quota|ratelimit/i.test(key)) {
       out[key] = value;
     }
   });
@@ -23,24 +108,13 @@ function interestingHeaders(headers) {
 
 function listFromPayload(payload) {
   if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.value)) return payload.value;
   if (Array.isArray(payload?.data)) return payload.data;
   if (Array.isArray(payload?.bookmakers)) return payload.bookmakers;
   if (Array.isArray(payload?.exchanges)) return payload.exchanges;
   if (Array.isArray(payload?.events)) return payload.events;
   if (Array.isArray(payload?.markets)) return payload.markets;
   return [];
-}
-
-function keyText(row) {
-  return [
-    row?.key,
-    row?.exchange_key,
-    row?.bookmaker_key,
-    row?.id,
-    row?.name,
-    row?.title,
-    row?.display_name
-  ].filter(Boolean).join(' ').toLowerCase();
 }
 
 function countBy(rows, field) {
@@ -58,26 +132,17 @@ function compactRow(row) {
     id: row.id || row.event_id || row.market_id || null,
     key: row.key || row.exchange_key || row.bookmaker_key || row.id || null,
     title: row.title || row.name || row.display_name || null,
-    rawTitle: row.rawTitle || row.raw_title || row.question || row.description || null,
     source: row.source || row.exchange || row.bookmaker || null,
-    sport_key: row.sport_key || row.sport || null,
+    sport_key: row.sport_key || row.sport || row.key || null,
+    active: row.active ?? null,
     market_type: row.market_type || row.marketType || row.type || null,
     market_key: row.market_key || null,
     line: row.line ?? row.point ?? row.strike ?? null,
-    yesPrice: row.yesPrice ?? row.yes_price ?? row.yes ?? row.best_yes_price ?? null,
-    noPrice: row.noPrice ?? row.no_price ?? row.no ?? row.best_no_price ?? null,
     over_price: row.over_price ?? null,
     under_price: row.under_price ?? null,
-    price: row.price ?? row.odds ?? null,
-    volume: row.volume ?? row.volume24h ?? row.liquidity ?? null,
-    volume_usd: row.volume_usd ?? null,
-    last_update: row.last_update || null,
     commence_time: row.commence_time || row.start_time || row.startTime || null,
     home_team: row.home_team || row.home || null,
     away_team: row.away_team || row.away || null,
-    outcomes: Array.isArray(row.outcomes)
-      ? row.outcomes.slice(0, 4)
-      : undefined,
     bookmakers: Array.isArray(row.bookmakers)
       ? row.bookmakers.slice(0, 5).map(b => ({ key: b.key, title: b.title }))
       : undefined,
@@ -122,8 +187,12 @@ async function callParlay(path, params = {}) {
   };
 }
 
+function normalizeKey(key) {
+  return String(key || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 function sourceKey(row) {
-  return String(row?.key || row?.exchange_key || row?.bookmaker_key || row?.id || row?.exchange || '').toLowerCase();
+  return normalizeKey(row?.key || row?.exchange_key || row?.bookmaker_key || row?.id || row?.exchange || '');
 }
 
 function sourceTitle(row) {
@@ -142,6 +211,17 @@ function setDiff(allRows, seenRows) {
   return allRows.filter(row => !seen.has(row.key));
 }
 
+function excludedActiveSports(sportsRows) {
+  return sportsRows
+    .filter(row => row.active && !SPORTS.includes(row.key))
+    .map(row => ({
+      key: row.key,
+      title: row.title || row.name || row.key,
+      reason: SPORT_EXCLUSION_REASONS[row.key] || 'not enabled; current matcher is verified only for MLB/NBA/NFL/NHL team games'
+    }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'no-store');
@@ -154,62 +234,71 @@ module.exports = async function handler(req, res) {
     const checks = [];
     const bookmakerSeen = {};
     const exchangeSeen = {};
+    const exchangeMarketCounts = {};
+    const removedBooksSeen = {};
+    const unsupportedBooksSeen = {};
+    const timeWindow = buildTimeWindow(req);
 
     const bookmakers = await callParlay('/bookmakers');
     checks.push(bookmakers);
     const bookmakersAvailable = sourceList(bookmakers.rows);
 
-    for (const sport of SPORTS) {
-      const odds = await callParlay(`/sports/${sport}/odds`, {
-        regions: 'us',
-        markets: 'h2h,spreads,totals',
-        oddsFormat: 'american'
-      });
-      checks.push(odds);
-      for (const ev of odds.rows) {
-        for (const book of ev.bookmakers || []) {
-          const key = sourceKey(book);
-          if (key) bookmakerSeen[key] = book.title || book.name || key;
-        }
-      }
-
-      const props = await callParlay(`/sports/${sport}/props`, {
-        regions: 'us',
-        oddsFormat: 'american'
-      });
-      checks.push(props);
-      for (const ev of props.rows) {
-        for (const book of ev.bookmakers || []) {
-          const key = sourceKey(book);
-          if (key) bookmakerSeen[key] = book.title || book.name || key;
-        }
-      }
-    }
-
     const exchanges = await callParlay('/exchanges');
     checks.push(exchanges);
     const exchangesAvailable = sourceList(exchanges.rows);
 
-    const exchangeKeys = exchangesAvailable.map(row => row.key);
-    const exchangeMarketCounts = {};
+    const sports = await callParlay('/sports');
+    checks.push(sports);
+    const activeSportKeys = sports.rows
+      .filter(row => row.active)
+      .map(row => row.key)
+      .filter(Boolean)
+      .sort();
 
-    for (const exchangeKey of exchangeKeys) {
-      for (const sport of SPORTS) {
+    for (const sport of SPORTS) {
+      const odds = await callParlay(`/sports/${sport}/odds`, {
+        regions: 'us',
+        markets: 'h2h,spreads,totals',
+        oddsFormat: 'american',
+        commenceTimeFrom: timeWindow.commenceTimeFrom,
+        commenceTimeTo: timeWindow.commenceTimeTo
+      });
+      checks.push(odds);
+
+      for (const ev of odds.rows.filter(row => inTimeWindow(row.commence_time, timeWindow))) {
+        for (const book of ev.bookmakers || []) {
+          const key = sourceKey(book);
+          if (!key) continue;
+          if (REMOVED_BOOK_SET.has(key)) {
+            removedBooksSeen[key] = book.title || book.name || key;
+          } else if (FINAL_BOOK_SET.has(key)) {
+            bookmakerSeen[key] = book.title || book.name || key;
+          } else {
+            unsupportedBooksSeen[key] = book.title || book.name || key;
+          }
+        }
+      }
+
+      const exchangeCalls = SUPPORTED_EXCHANGE_CALLS.filter(call => call.sport === sport);
+      for (const { exchange: exchangeKey } of exchangeCalls) {
         const exchangeMarkets = await callParlay(`/exchange/${sport}/markets`, {
           exchange: exchangeKey
         });
         checks.push(exchangeMarkets);
+
+        const exchangeRowsInWindow = exchangeMarkets.rows.filter(row => inTimeWindow(row.commence_time, timeWindow));
         if (!exchangeMarketCounts[exchangeKey]) exchangeMarketCounts[exchangeKey] = {};
-        exchangeMarketCounts[exchangeKey][sport] = exchangeMarkets.rowCount;
-        if (exchangeMarkets.rowCount > 0) {
+        exchangeMarketCounts[exchangeKey][sport] = {
+          raw: exchangeMarkets.rowCount,
+          inLookaheadWindow: exchangeRowsInWindow.length
+        };
+
+        if (exchangeRowsInWindow.length > 0) {
           const exchangeMeta = exchangesAvailable.find(e => e.key === exchangeKey);
           exchangeSeen[exchangeKey] = exchangeMeta?.title || exchangeKey;
         }
       }
     }
-
-    const sports = await callParlay('/sports');
-    checks.push(sports);
 
     const bookmakersCurrentlySeen = Object.entries(bookmakerSeen)
       .map(([key, title]) => ({ key, title }))
@@ -217,15 +306,39 @@ module.exports = async function handler(req, res) {
     const exchangesCurrentlySeen = Object.entries(exchangeSeen)
       .map(([key, title]) => ({ key, title }))
       .sort((a, b) => a.key.localeCompare(b.key));
-
+    const booksReturnedByParlay = [...bookmakersCurrentlySeen, ...exchangesCurrentlySeen]
+      .filter((row, idx, arr) => arr.findIndex(other => other.key === row.key) === idx)
+      .sort((a, b) => a.key.localeCompare(b.key));
     const cleanChecks = checks.map(({ rows, ...check }) => check);
 
     return res.status(200).json({
       ok: true,
       pulledAt: new Date().toISOString(),
+      activeSportKeys,
+      supportedSportKeysCurrentlyIncluded: SPORTS,
+      excludedActiveSportKeys: excludedActiveSports(sports.rows),
       bookmakersAvailable,
       exchangesAvailable,
-      sportsAvailable: sports.rows.map(compactRow),
+      finalDisplayedAllowedBookKeys: FINAL_BOOK_KEYS,
+      booksReturnedByParlay,
+      booksRemovedByExclusionList: REMOVED_BOOK_KEYS,
+      removedBooksSeenInProductionOdds: Object.entries(removedBooksSeen)
+        .map(([key, title]) => ({ key, title }))
+        .sort((a, b) => a.key.localeCompare(b.key)),
+      unsupportedBooksSeenInProductionOdds: Object.entries(unsupportedBooksSeen)
+        .map(([key, title]) => ({ key, title }))
+        .sort((a, b) => a.key.localeCompare(b.key)),
+      currentLookaheadDays: timeWindow.lookaheadDays,
+      commenceTimeFiltering: {
+        oddsSupportedByOpenApi: true,
+        oddsAppliedUpstream: true,
+        oddsAlsoFilteredServerSide: true,
+        exchangeSupportedByOpenApi: false,
+        exchangeAppliedUpstream: false,
+        exchangeFilteredServerSide: true,
+        commenceTimeFrom: timeWindow.commenceTimeFrom,
+        commenceTimeTo: timeWindow.commenceTimeTo
+      },
       bookmakersCurrentlySeen,
       exchangesCurrentlySeen,
       bookmakersMissing: setDiff(bookmakersAvailable, bookmakersCurrentlySeen),

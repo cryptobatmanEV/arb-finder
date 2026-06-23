@@ -197,36 +197,24 @@ const CORE_PLATFORMS = ['polymarket','kalshi','novig','fliff'];
 // These are the actual platform keys returned by /api/parlay.
 // Keep these keys exact. Do not use display names or unverified aliases.
 const PARLAY_BOOKS = [
-  'bet365','betclic','betmgm','betr','betrivers','betrivers_ca','bovada',
-  'bwin','caesars','draftkings','fanatics','fanduel','fliff','hardrock',
-  'kalshi','maverick_games','novig','parlayplay','parx','pick6','pinnacle',
-  'pmu','polymarket','prizepicks','prophetx','robinhood','rushbet','sleeper',
-  'underdog','unibet','unibet_be','unibet_nl','winamax'
+  'bet365','betmgm','betrivers','bovada','caesars','draftkings','fanatics',
+  'fanduel','fliff','hardrock','kalshi','novig','pinnacle','polymarket',
+  'prophetx','stake','sugarhouse','tipico'
 ];
 const ALL_BOOK_FILTERS = [...new Set([...CORE_PLATFORMS, ...PARLAY_BOOKS])];
 const PLAT_LB  = {
   polymarket:'Polymarket', kalshi:'Kalshi', novig:'Novig', fliff:'Fliff',
   draftkings:'DraftKings', fanduel:'FanDuel', pinnacle:'Pinnacle', bovada:'Bovada',
   betmgm:'BetMGM', caesars:'Caesars', fanatics:'Fanatics', betrivers:'BetRivers',
-  bet365:'Bet365', parx:'Parx', hardrock:'Hard Rock', tipico:'Tipico',
-  stake:'Stake', sugarhouse:'SugarHouse', prophetx:'ProphetX',
-  betclic:'Betclic', betr:'Betr', betrivers_ca:'BetRivers CA', bwin:'Bwin',
-  maverick_games:'Maverick Games', parlayplay:'ParlayPlay', pick6:'Pick6',
-  pmu:'PMU', prizepicks:'PrizePicks', robinhood:'Robinhood', rushbet:'RushBet',
-  sleeper:'Sleeper', underdog:'Underdog', unibet:'Unibet',
-  unibet_be:'Unibet BE', unibet_nl:'Unibet NL', winamax:'Winamax'
+  bet365:'Bet365', hardrock:'Hard Rock', tipico:'Tipico',
+  stake:'Stake', sugarhouse:'SugarHouse', prophetx:'ProphetX'
 };
 const PLAT_CLS = {
   polymarket:'pm-c', kalshi:'ka-c', novig:'nv-c', fliff:'fl-c',
   draftkings:'pa-c', fanduel:'pa-c', pinnacle:'pa-c', bovada:'pa-c',
   betmgm:'pa-c', caesars:'pa-c', fanatics:'pa-c', betrivers:'pa-c',
-  bet365:'pa-c', parx:'pa-c', hardrock:'pa-c', tipico:'pa-c',
-  stake:'pa-c', sugarhouse:'pa-c', prophetx:'pa-c',
-  betclic:'pa-c', betr:'pa-c', betrivers_ca:'pa-c', bwin:'pa-c',
-  maverick_games:'pa-c', parlayplay:'pa-c', pick6:'pa-c', pmu:'pa-c',
-  prizepicks:'pa-c', robinhood:'pa-c', rushbet:'pa-c', sleeper:'pa-c',
-  underdog:'pa-c', unibet:'pa-c', unibet_be:'pa-c', unibet_nl:'pa-c',
-  winamax:'pa-c'
+  bet365:'pa-c', hardrock:'pa-c', tipico:'pa-c',
+  stake:'pa-c', sugarhouse:'pa-c', prophetx:'pa-c'
 };
 const FILTERS  = ['all','mlb','nba','nfl','nhl','crypto','other'];
 const FILTER_LB = { all:'All', mlb:'MLB', nba:'NBA', nfl:'NFL', nhl:'NHL', crypto:'Crypto', other:'Other' };
