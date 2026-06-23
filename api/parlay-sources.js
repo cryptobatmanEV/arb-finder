@@ -50,6 +50,14 @@ function matchesTarget(row) {
   return TARGETS.some(t => text.includes(t));
 }
 
+function countBy(rows, field) {
+  return rows.reduce((acc, row) => {
+    const key = row?.[field] == null ? 'null' : String(row[field]);
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+}
+
 function compactRow(row) {
   if (!row || typeof row !== 'object') return row;
   return {
@@ -114,6 +122,8 @@ async function callParlay(path, params = {}) {
     ok: r.ok,
     creditHeaders: interestingHeaders(r.headers),
     rowCount: rows.length,
+    countsByMarketKey: countBy(rows, 'market_key'),
+    countsByMarketType: countBy(rows, 'market_type'),
     foundTargets: targetRows.map(compactRow),
     sampleRows: rows.slice(0, 3).map(compactRow),
     errorText: r.ok ? undefined : text.slice(0, 800)
