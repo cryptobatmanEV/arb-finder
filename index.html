@@ -195,26 +195,26 @@ const REFRESH_SECS = 60;
 const BASE_STAKE   = 100;
 const CORE_PLATFORMS = ['polymarket','kalshi','novig','fliff'];
 // These are the actual platform keys returned by /api/parlay.
-// Keep these keys exact. Do not use display names like hardrockbet/pointsbetus.
+// Keep these keys exact. Do not use display names or unverified aliases.
 const PARLAY_BOOKS = [
   'draftkings','fanduel','pinnacle','bovada','kalshi','novig','bet365',
-  'betmgm','betrivers','caesars','parx','fanatics','hardrock','pointsbet',
-  'fliff','tipico','stake','sugarhouse'
+  'betmgm','betrivers','caesars','parx','fanatics','hardrock','fliff',
+  'tipico','stake','sugarhouse','prophetx'
 ];
 const ALL_BOOK_FILTERS = [...new Set([...CORE_PLATFORMS, ...PARLAY_BOOKS])];
 const PLAT_LB  = {
   polymarket:'Polymarket', kalshi:'Kalshi', novig:'Novig', fliff:'Fliff',
   draftkings:'DraftKings', fanduel:'FanDuel', pinnacle:'Pinnacle', bovada:'Bovada',
   betmgm:'BetMGM', caesars:'Caesars', fanatics:'Fanatics', betrivers:'BetRivers',
-  bet365:'Bet365', parx:'Parx', hardrock:'Hard Rock', pointsbet:'PointsBet',
-  tipico:'Tipico', stake:'Stake', sugarhouse:'SugarHouse'
+  bet365:'Bet365', parx:'Parx', hardrock:'Hard Rock', tipico:'Tipico',
+  stake:'Stake', sugarhouse:'SugarHouse', prophetx:'ProphetX'
 };
 const PLAT_CLS = {
   polymarket:'pm-c', kalshi:'ka-c', novig:'nv-c', fliff:'fl-c',
   draftkings:'pa-c', fanduel:'pa-c', pinnacle:'pa-c', bovada:'pa-c',
   betmgm:'pa-c', caesars:'pa-c', fanatics:'pa-c', betrivers:'pa-c',
-  bet365:'pa-c', parx:'pa-c', hardrock:'pa-c', pointsbet:'pa-c',
-  tipico:'pa-c', stake:'pa-c', sugarhouse:'pa-c'
+  bet365:'pa-c', parx:'pa-c', hardrock:'pa-c', tipico:'pa-c',
+  stake:'pa-c', sugarhouse:'pa-c', prophetx:'pa-c'
 };
 const FILTERS  = ['all','mlb','nba','nfl','nhl','crypto','other'];
 const FILTER_LB = { all:'All', mlb:'MLB', nba:'NBA', nfl:'NFL', nhl:'NHL', crypto:'Crypto', other:'Other' };
@@ -407,6 +407,56 @@ const KALSHI_TEAM_NAMES = {
   'seattle kraken':'sea','st louis blues':'stl','tampa bay lightning':'tb','toronto maple leafs':'tor',
   'utah hockey club':'uta','utah mammoth':'uta','vancouver canucks':'van','vegas golden knights':'vgk',
   'washington capitals':'wsh','winnipeg jets':'wpg',
+};
+
+const SPORT_TEAM_ABBR = {
+  nba: {
+    'atlanta hawks':'atl','boston celtics':'bos','brooklyn nets':'bkn','charlotte hornets':'cha',
+    'chicago bulls':'chi','cleveland cavaliers':'cle','dallas mavericks':'dal','denver nuggets':'den',
+    'detroit pistons':'det','golden state warriors':'gsw','houston rockets':'hou','indiana pacers':'ind',
+    'los angeles clippers':'lac','la clippers':'lac','los angeles lakers':'lal','la lakers':'lal',
+    'memphis grizzlies':'mem','miami heat':'mia','milwaukee bucks':'mil','minnesota timberwolves':'min',
+    'new orleans pelicans':'nop','new york knicks':'nyk','oklahoma city thunder':'okc','orlando magic':'orl',
+    'philadelphia 76ers':'phi','philadelphia sixers':'phi','phoenix suns':'phx','portland trail blazers':'por',
+    'sacramento kings':'sac','san antonio spurs':'sas','toronto raptors':'tor','utah jazz':'uta',
+    'washington wizards':'was'
+  },
+  mlb: {
+    'arizona diamondbacks':'ari','athletics':'oak','oakland athletics':'oak','baltimore orioles':'bal',
+    'boston red sox':'bos','chicago cubs':'chc','chicago white sox':'cws','cincinnati reds':'cin',
+    'cleveland guardians':'cle','colorado rockies':'col','detroit tigers':'det','houston astros':'hou',
+    'kansas city royals':'kc','los angeles angels':'laa','los angeles dodgers':'lad','miami marlins':'mia',
+    'milwaukee brewers':'mil','minnesota twins':'min','new york mets':'nym','new york yankees':'nyy',
+    'philadelphia phillies':'phi','pittsburgh pirates':'pit','san diego padres':'sd',
+    'san francisco giants':'sf','seattle mariners':'sea','st louis cardinals':'stl',
+    'st. louis cardinals':'stl','tampa bay rays':'tb','texas rangers':'tex',
+    'toronto blue jays':'tor','washington nationals':'wsh'
+  },
+  nfl: {
+    'arizona cardinals':'ari','atlanta falcons':'atl','baltimore ravens':'bal','buffalo bills':'buf',
+    'carolina panthers':'car','chicago bears':'chi','cincinnati bengals':'cin','cleveland browns':'cle',
+    'dallas cowboys':'dal','denver broncos':'den','detroit lions':'det','green bay packers':'gb',
+    'houston texans':'hou','indianapolis colts':'ind','jacksonville jaguars':'jax',
+    'kansas city chiefs':'kc','las vegas raiders':'lv','los angeles chargers':'lac',
+    'los angeles rams':'lar','miami dolphins':'mia','minnesota vikings':'min',
+    'new england patriots':'ne','new orleans saints':'no','new york giants':'nyg',
+    'new york jets':'nyj','philadelphia eagles':'phi','pittsburgh steelers':'pit',
+    'san francisco 49ers':'sf','seattle seahawks':'sea','tampa bay buccaneers':'tb',
+    'tennessee titans':'ten','washington commanders':'was'
+  },
+  nhl: {
+    'anaheim ducks':'ana','boston bruins':'bos','buffalo sabres':'buf','calgary flames':'cgy',
+    'carolina hurricanes':'car','chicago blackhawks':'chi','colorado avalanche':'col',
+    'columbus blue jackets':'cbj','dallas stars':'dal','detroit red wings':'det',
+    'edmonton oilers':'edm','florida panthers':'fla','los angeles kings':'lak',
+    'minnesota wild':'min','montreal canadiens':'mtl','nashville predators':'nsh',
+    'new jersey devils':'njd','new york islanders':'nyi','new york rangers':'nyr',
+    'ottawa senators':'ott','philadelphia flyers':'phi','pittsburgh penguins':'pit',
+    'san jose sharks':'sj','seattle kraken':'sea','st louis blues':'stl',
+    'st. louis blues':'stl','tampa bay lightning':'tb','toronto maple leafs':'tor',
+    'utah hockey club':'uta','utah mammoth':'uta','vancouver canucks':'van',
+    'vegas golden knights':'vgk','washington capitals':'wsh','winnipeg jets':'wpg'
+  }
 };
 
 function extractKalshiFavoredTeam(title) {
@@ -1160,12 +1210,19 @@ async function fetchNovig() {
   return markets.map(m => extractNovigStructure(m)).filter(Boolean);
 }
 
-function teamNameToAbbr(fullName) {
+function cleanTeamName(fullName) {
   if (!fullName) return null;
-  const t = String(fullName).toLowerCase().trim()
+  return String(fullName).toLowerCase().trim()
     .replace(/\./g, '')
     .replace(/&/g, 'and')
     .replace(/\s+/g, ' ');
+}
+
+function teamNameToAbbr(fullName, sport = null) {
+  const t = cleanTeamName(fullName);
+  if (!t) return null;
+
+  if (sport && SPORT_TEAM_ABBR[sport]?.[t]) return SPORT_TEAM_ABBR[sport][t];
 
   // Exact full-name match first. This prevents MLB Giants from becoming NFL Giants, etc.
   if (KALSHI_TEAM_NAMES[t]) return KALSHI_TEAM_NAMES[t];
@@ -1186,6 +1243,25 @@ function teamNameToAbbr(fullName) {
   }
 
   return null;
+}
+
+function noteParlayDrop(debug, reason, market, detail = {}) {
+  if (!debug) return;
+  debug.dropped[reason] = (debug.dropped[reason] || 0) + 1;
+  if (!debug.samples[reason]) debug.samples[reason] = [];
+  if (debug.samples[reason].length < 8) {
+    debug.samples[reason].push({
+      platform: market?.platform,
+      sport: market?.sport,
+      marketType: market?.marketType,
+      away: market?.away,
+      home: market?.home,
+      startTime: market?.startTime,
+      yesPrice: market?.yesPrice,
+      noPrice: market?.noPrice,
+      ...detail
+    });
+  }
 }
 
 function extractFliffStructure(m) {
@@ -1244,46 +1320,68 @@ async function fetchFliff() {
 }
 
 
-function extractParlayStructure(m) {
+function extractParlayStructure(m, debug = null) {
   const home = m.home;
   const away = m.away;
   const platform = (m.platform || m.bookKey || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   const marketType = m.marketType || 'moneyline';
   const sport = m.sport || 'other';
   const startTime = m.startTime || m.commence_time || '';
-  if (!home || !away || !platform || sport === 'other') return null;
+  if (!home || !away || !platform || sport === 'other') {
+    noteParlayDrop(debug, 'missing_event_fields', m, { platform, sport });
+    return null;
+  }
 
-  const homeAbbr = teamNameToAbbr(home);
-  const awayAbbr = teamNameToAbbr(away);
-  if (!homeAbbr || !awayAbbr) return null;
+  const homeAbbr = teamNameToAbbr(home, sport);
+  const awayAbbr = teamNameToAbbr(away, sport);
+  if (!homeAbbr || !awayAbbr) {
+    noteParlayDrop(debug, 'missing_team_abbreviation', m, { homeAbbr, awayAbbr });
+    return null;
+  }
 
-  const dateStr = startTime
-    ? new Date(new Date(startTime) - 4 * 60 * 60 * 1000).toISOString().slice(0, 10)
-    : null;
-  if (!dateStr) return null;
+  const startMs = startTime ? new Date(startTime).getTime() : NaN;
+  if (!Number.isFinite(startMs)) {
+    noteParlayDrop(debug, 'missing_invalid_date', m, { startTime });
+    return null;
+  }
+  const dateStr = new Date(startMs - 4 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
   const gameKey = `${sport}-${awayAbbr}-${homeAbbr}-${dateStr}`;
   const yesPrice = Number(m.yesPrice);
   const noPrice = Number(m.noPrice);
-  if (!yesPrice || !noPrice) return null;
-  if (yesPrice < 0.02 || yesPrice > 0.98) return null;
-  if (noPrice  < 0.02 || noPrice  > 0.98) return null;
+  if (!Number.isFinite(yesPrice) || !Number.isFinite(noPrice) || !yesPrice || !noPrice) {
+    noteParlayDrop(debug, 'missing_invalid_prices', m, { yesPrice, noPrice });
+    return null;
+  }
+  if (yesPrice < 0.02 || yesPrice > 0.98 || noPrice < 0.02 || noPrice > 0.98) {
+    noteParlayDrop(debug, 'price_out_of_range', m, { yesPrice, noPrice });
+    return null;
+  }
 
   let rawTitle = m.rawTitle || `${away} vs ${home}`;
   let noTitle = m.noTitle || rawTitle;
   let line = m.line == null ? null : Number(m.line);
+  if (m.line != null && !Number.isFinite(line)) {
+    noteParlayDrop(debug, 'missing_invalid_line', m, { line: m.line });
+    return null;
+  }
 
   // For spread matching, this is the team whose spread is being bet.
   // Example: "Spread: San Francisco 49ers (+3.5)" → sf.
   let favoredTeam = null;
   if (marketType === 'spread') {
     const spreadTeamMatch = rawTitle.match(/Spread:\s+(.+?)\s+\(/i);
-    favoredTeam = spreadTeamMatch ? teamNameToAbbr(spreadTeamMatch[1]) : null;
+    favoredTeam = spreadTeamMatch ? teamNameToAbbr(spreadTeamMatch[1], sport) : null;
+    if (!favoredTeam) {
+      noteParlayDrop(debug, 'missing_spread_team_abbreviation', m, { rawTitle });
+      return null;
+    }
   }
 
   return {
     id: `pa_${platform}_${m.id || `${awayAbbr}_${homeAbbr}_${marketType}_${line || 'ml'}`}`,
     platform,
+    source: 'parlay',
     rawTitle,
     noTitle,
     sport,
@@ -1309,15 +1407,43 @@ async function fetchParlay() {
   const cachedAt = Number(localStorage.getItem('parlayMarketsCacheAt') || 0);
   const fiveMin = 5 * 60 * 1000;
 
+  const normalizeRaw = (raw, meta = {}) => {
+    const debug = {
+      rawCount: raw.length,
+      normalizedCount: 0,
+      fromCache: !!meta.fromCache,
+      booksSeen: meta.booksSeen || [...new Set(raw.map(m => m.platform).filter(Boolean))].sort(),
+      dropped: {},
+      samples: {},
+      byBook: {},
+      bySport: {},
+      matchedPairs: 0,
+      arbOrNearPairs: 0
+    };
+    const normalized = [];
+    raw.forEach(m => {
+      const n = extractParlayStructure(m, debug);
+      if (!n) return;
+      normalized.push(n);
+      debug.byBook[n.platform] = (debug.byBook[n.platform] || 0) + 1;
+      debug.bySport[n.sport] = (debug.bySport[n.sport] || 0) + 1;
+    });
+    debug.normalizedCount = normalized.length;
+    window.__PARLAY_DEBUG = debug;
+    console.info('[ParlayAPI] normalization debug', debug);
+    if (Object.keys(debug.dropped).length) console.table(debug.dropped);
+    return normalized;
+  };
+
   if (cached && cachedAt && Date.now() - cachedAt < fiveMin) {
-    try { return JSON.parse(cached).map(m => extractParlayStructure(m)).filter(Boolean); } catch (_) {}
+    try { return normalizeRaw(JSON.parse(cached), { fromCache: true }); } catch (_) {}
   }
 
   const data = await fetchCachedRaw('/api/parlay');
   const raw = data.markets || (Array.isArray(data) ? data : []);
   localStorage.setItem('parlayMarketsCache', JSON.stringify(raw));
   localStorage.setItem('parlayMarketsCacheAt', String(Date.now()));
-  return raw.map(m => extractParlayStructure(m)).filter(Boolean);
+  return normalizeRaw(raw, { booksSeen: data.booksSeen || null });
 }
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -1613,7 +1739,15 @@ function App() {
   const [showNear, setShowNear] = useState(true);
   const [nearOpen, setNearOpen] = useState(true);
   const [firstLoad,setFirst]    = useState(true);
+  const [parlayDebug, setParlayDebug] = useState(null);
   const parlayRef = React.useRef([]);
+
+  useEffect(() => {
+    setEnabledBooks(prev => {
+      const cleaned = prev.filter(b => ALL_BOOK_FILTERS.includes(b));
+      return cleaned.length === prev.length ? prev : cleaned;
+    });
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('enabledBooks', JSON.stringify(enabledBooks));
@@ -1623,11 +1757,14 @@ function App() {
     const allStructured = [...mkts.polymarket, ...mkts.kalshi, ...mkts.novig, ...mkts.fliff, ...mkts.parlay];
     const matched = matchMarkets(allStructured);
     setPairs(matched.length);
+    const parlayMatchedPairs = matched.filter(([mA, mB]) => mA.source === 'parlay' || mB.source === 'parlay').length;
 
     const arbList = [], nearList = [];
+    let parlayArbOrNearPairs = 0;
     matched.forEach(([mA, mB]) => {
       const opp = calcArb(mA, mB);
       if (!opp) return;
+      if (mA.source === 'parlay' || mB.source === 'parlay') parlayArbOrNearPairs += 1;
       if (opp.isArb) arbList.push(opp);
       else if (opp.isNear) nearList.push(opp);
     });
@@ -1636,6 +1773,15 @@ function App() {
     nearList.sort((a,b) => b.margin - a.margin);
     setArbs(arbList);
     setNear(nearList);
+    if (window.__PARLAY_DEBUG) {
+      window.__PARLAY_DEBUG.matchedPairs = parlayMatchedPairs;
+      window.__PARLAY_DEBUG.arbOrNearPairs = parlayArbOrNearPairs;
+      console.info('[ParlayAPI] match debug', {
+        matchedPairsInvolvingParlay: parlayMatchedPairs,
+        arbsOrNearArbsInvolvingParlay: parlayArbOrNearPairs
+      });
+    }
+    return { parlayMatchedPairs, parlayArbOrNearPairs };
   }, []);
 
   const refresh = useCallback(async () => {
@@ -1674,7 +1820,8 @@ function App() {
       setStatus(prev => ({ ...prev, parlay:'ok' }));
       setErrors(prev => { const e = { ...prev }; delete e.parlay; return e; });
       setParlayUp(new Date());
-      recalc(next);
+      const matchStats = recalc(next);
+      setParlayDebug({ ...(window.__PARLAY_DEBUG || {}), ...matchStats });
     } catch (e) {
       setStatus(prev => ({ ...prev, parlay:'error' }));
       setErrors(prev => ({ ...prev, parlay: e.message }));
@@ -1781,6 +1928,14 @@ function App() {
           })}
         </div>
       </div>
+
+      {parlayDebug && (
+        <div className="countdown" style={{margin:'8px 0 18px'}}>
+          Parlay debug: raw {parlayDebug.rawCount?.toLocaleString?.() || 0} · normalized {parlayDebug.normalizedCount?.toLocaleString?.() || 0} ·
+          missing teams {parlayDebug.dropped?.missing_team_abbreviation || 0} · invalid prices {parlayDebug.dropped?.missing_invalid_prices || 0} ·
+          Parlay matched pairs {parlayDebug.parlayMatchedPairs || parlayDebug.matchedPairs || 0} · arbs/near-arbs {parlayDebug.parlayArbOrNearPairs || parlayDebug.arbOrNearPairs || 0}
+        </div>
+      )}
 
       {firstLoad && loading ? (
         <div className="cards">{[1,2,3].map(i=><div key={i} className="skel skel-card"/>)}</div>

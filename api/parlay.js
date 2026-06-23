@@ -28,17 +28,33 @@ function googleUrl(book, away, home) {
   return 'https://www.google.com/search?q=' + encodeURIComponent(`${book} ${away} ${home} odds`);
 }
 
-function normalizeEvent(ev, sport) {
+function noteSkip(debug, reason) {
+  if (!debug) return;
+  debug.skipped[reason] = (debug.skipped[reason] || 0) + 1;
+}
+
+function normalizeBookKey(key) {
+  return String(key || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function normalizeEvent(ev, sport, debug) {
   const out = [];
   const home = ev.home_team;
   const away = ev.away_team;
   const startTime = ev.commence_time;
 
-  if (!home || !away) return out;
+  if (!home || !away) {
+    noteSkip(debug, 'missing_teams');
+    return out;
+  }
 
   for (const book of ev.bookmakers || []) {
-    const platform = book.key;
+    const platform = normalizeBookKey(book.key);
     const bookTitle = book.title || book.key;
+    if (!platform) {
+      noteSkip(debug, 'missing_book_key');
+      continue;
+    }
 
     for (const market of book.markets || []) {
       const key = market.key;
@@ -51,7 +67,10 @@ function normalizeEvent(ev, sport) {
         const yesPrice = implied(awayOut?.price);
         const noPrice = implied(homeOut?.price);
 
-        if (!yesPrice || !noPrice) continue;
+        if (!yesPrice || !noPrice) {
+          noteSkip(debug, 'h2h_missing_prices');
+          continue;
+        }
 
         out.push({
           id: `${ev.id}-${platform}-h2h`,
@@ -79,7 +98,10 @@ function normalizeEvent(ev, sport) {
         const noPrice = implied(under?.price);
         const point = over?.point ?? under?.point;
 
-        if (!yesPrice || !noPrice || point == null) continue;
+        if (!yesPrice || !noPrice || point == null) {
+          noteSkip(debug, 'total_missing_prices_or_line');
+          continue;
+        }
 
         out.push({
           id: `${ev.id}-${platform}-total-${point}`,
@@ -106,12 +128,18 @@ function normalizeEvent(ev, sport) {
           const point = side.point;
           const yesPrice = implied(side.price);
 
-          if (!team || point == null || !yesPrice) continue;
+          if (!team || point == null || !yesPrice) {
+            noteSkip(debug, 'spread_missing_team_price_or_line');
+            continue;
+          }
 
           const other = outcomes.find(o => o.name !== team);
           const noPrice = implied(other?.price);
 
-          if (!noPrice) continue;
+          if (!noPrice) {
+            noteSkip(debug, 'spread_missing_other_price');
+            continue;
+          }
 
           out.push({
             id: `${ev.id}-${platform}-spread-${team}-${point}`,
@@ -151,6 +179,9 @@ module.exports = async function handler(req, res) {
     const markets = [];
     const debug = [];
     const booksSeen = {};
+    const skipped = {};
+    const countsByBook = {};
+    const countsBySport = {};
 
     for (const sport of SPORTS) {
       const url = new URL(`${BASE}/sports/${sport}/odds`);
@@ -177,9 +208,15 @@ module.exports = async function handler(req, res) {
 
       for (const ev of events) {
         for (const b of ev.bookmakers || []) {
-          booksSeen[b.key] = b.title || b.key;
+          const key = normalizeBookKey(b.key);
+          if (key) booksSeen[key] = b.title || b.key;
         }
-        markets.push(...normalizeEvent(ev, sport));
+        const normalized = normalizeEvent(ev, sport, { skipped });
+        normalized.forEach(m => {
+          countsByBook[m.platform] = (countsByBook[m.platform] || 0) + 1;
+          countsBySport[m.sport] = (countsBySport[m.sport] || 0) + 1;
+        });
+        markets.push(...normalized);
       }
 
       debug.push({ sport, ok: true, events: events.length });
@@ -189,6 +226,9 @@ module.exports = async function handler(req, res) {
       markets,
       count: markets.length,
       booksSeen,
+      countsByBook,
+      countsBySport,
+      skipped,
       pulledAt: new Date().toISOString(),
       debug
     });
