@@ -1582,26 +1582,6 @@ function groupOpportunities(opps) {
   }).sort((a, b) => b.margin - a.margin);
 }
 
-function annotateOpportunities(opps) {
-  const groups = new Map();
-  (opps || []).forEach(opp => {
-    const key = groupedOppKey(opp);
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(opp);
-  });
-  return (opps || []).map(opp => {
-    const group = groups.get(groupedOppKey(opp)) || [opp];
-    return {
-      ...opp,
-      groupedCount: group.length,
-      alternatives: {
-        legA: collectSideBooks(group, opp.legA),
-        legB: collectSideBooks(group, opp.legB)
-      }
-    };
-  });
-}
-
 function probToAmerican(p) {
   if (!p || p <= 0 || p >= 1) return '—';
   return p >= 0.5
@@ -1659,19 +1639,21 @@ function ProphetXDebug({ debug }) {
 
 function AlsoAvailable({ opp }) {
   const alt = opp.alternatives || {};
+  const legAAlternates = (alt.legA || []).filter(book => book.platform !== opp.legA.platform);
+  const legBAlternates = (alt.legB || []).filter(book => book.platform !== opp.legB.platform);
   const rows = [
-    { label: humanOutcome(opp.legA.rawTitle, opp.legA.outcome), books: alt.legA || [] },
-    { label: humanOutcome(opp.legB.rawTitle, opp.legB.outcome), books: alt.legB || [] }
-  ].filter(row => row.books.length > 1);
+    { label: humanOutcome(opp.legA.rawTitle, opp.legA.outcome), books: legAAlternates },
+    { label: humanOutcome(opp.legB.rawTitle, opp.legB.outcome), books: legBAlternates }
+  ].filter(row => row.books.length > 0);
 
-  if (!rows.length) return null;
+  if (!rows.length && (!opp.groupedCount || opp.groupedCount <= 1)) return null;
 
   return (
     <div className="alt-books">
       {opp.groupedCount > 1 && (
         <div className="alt-book-row">
-          <span className="alt-book-label">Combined</span>
-          <span>{opp.groupedCount} equivalent book pair{opp.groupedCount === 1 ? '' : 's'} for this play</span>
+          <span className="alt-book-label">More books available</span>
+          <span>Best pair shown above from {opp.groupedCount} valid book pair{opp.groupedCount === 1 ? '' : 's'}</span>
         </div>
       )}
       {rows.map(row => (
@@ -1931,7 +1913,6 @@ function App() {
   const [sourceFilter, setSourceFilter] = useState('all');
   const [marketFilter, setMarketFilter] = useState('all');
   const [includeProps, setIncludeProps] = useState(false);
-  const [compactDuplicates, setCompactDuplicates] = useState(false);
   const [enabledBooks, setEnabledBooks] = useState(() => {
     try { return JSON.parse(localStorage.getItem('enabledBooks') || 'null') || ALL_BOOK_FILTERS; }
     catch (_) { return ALL_BOOK_FILTERS; }
@@ -2098,8 +2079,8 @@ function App() {
   const visibleOpp = (o) => visibleByBooks(o) && visibleBySource(o) && visibleByMarket(o);
   const fArbs = (filter === 'all' ? arbs : arbs.filter(a => a.sport === filter)).filter(visibleOpp);
   const fNear = (filter === 'all' ? near : near.filter(a => a.sport === filter)).filter(visibleOpp);
-  const displayArbs = compactDuplicates ? groupOpportunities(fArbs) : annotateOpportunities(fArbs);
-  const displayNear = compactDuplicates ? groupOpportunities(fNear) : annotateOpportunities(fNear);
+  const displayArbs = groupOpportunities(fArbs);
+  const displayNear = groupOpportunities(fNear);
   const shownOpps = [...displayArbs, ...displayNear];
   const shownSportsbookCards = shownOpps.filter(o => involvesPlatformSet(o, sportsbookSet)).length;
   const shownPairCounts = topEntries(countOppsByPlatform(shownOpps), 20);
@@ -2176,10 +2157,6 @@ function App() {
           <div className={`tswitch${showNear?' on':''}`}><div className="tknob"/></div>
           Show near-arbs
         </div>
-        <div className="near-toggle" onClick={() => setCompactDuplicates(!compactDuplicates)}>
-          <div className={`tswitch${compactDuplicates?' on':''}`}><div className="tknob"/></div>
-          Compact duplicates
-        </div>
       </div>
 
       <div className="filters" style={{marginTop:'-10px'}}>
@@ -2254,6 +2231,7 @@ function App() {
           <div className="sec-hdr">
             Live Arbitrage Opportunities
             {displayArbs.length > 0 && <span className="sec-count">{displayArbs.length}</span>}
+            {displayArbs.length > 0 && fArbs.length > displayArbs.length && <span className="sec-count">{fArbs.length} pairs</span>}
           </div>
 
           {displayArbs.length > 0
