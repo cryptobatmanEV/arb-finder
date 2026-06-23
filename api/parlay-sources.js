@@ -242,6 +242,72 @@ function summarizeMlbShapeCall(label, call) {
   };
 }
 
+function summarizeMainLineEvents(rows) {
+  const byBook = {};
+  const byMarket = {};
+  for (const ev of rows || []) {
+    for (const book of ev.bookmakers || []) {
+      const key = sourceKey(book);
+      if (key) byBook[key] = (byBook[key] || 0) + 1;
+      for (const market of book.markets || []) {
+        const mk = market.key || 'unknown';
+        byMarket[mk] = (byMarket[mk] || 0) + 1;
+      }
+    }
+  }
+  return {
+    rawEventCount: rows.length,
+    bookmakerKeysSeen: Object.keys(byBook).sort(),
+    bookmakerEventCounts: byBook,
+    marketCounts: byMarket,
+    ...firstEventDetails(rows)
+  };
+}
+
+function summarizePropsRows(rows) {
+  const byBook = {};
+  const byMarketKey = {};
+  let withPlayer = 0;
+  let withTeam = 0;
+  let withGame = 0;
+  let withLine = 0;
+  let withOverUnder = 0;
+  let withBookmaker = 0;
+  let withCommenceTime = 0;
+
+  for (const row of rows || []) {
+    const book = sourceKey(row.bookmaker ? { key: row.bookmaker } : row) || sourceKey(row);
+    const marketKey = row.market_key || row.market || row.key || row.market_type || 'unknown';
+    if (book) {
+      byBook[book] = (byBook[book] || 0) + 1;
+      withBookmaker += 1;
+    }
+    byMarketKey[marketKey] = (byMarketKey[marketKey] || 0) + 1;
+    if (row.player || row.player_name || row.participant) withPlayer += 1;
+    if (row.team || row.team_name || row.home_team || row.away_team) withTeam += 1;
+    if (row.game_id || row.event_id || row.home_team || row.away_team) withGame += 1;
+    if (row.line != null || row.point != null || row.strike != null) withLine += 1;
+    if ((row.over_price != null && row.under_price != null) || Array.isArray(row.outcomes)) withOverUnder += 1;
+    if (row.commence_time || row.start_time || row.startTime) withCommenceTime += 1;
+  }
+
+  return {
+    rowCount: rows.length,
+    bookmakerKeysSeen: Object.keys(byBook).sort(),
+    topMarketKeys: Object.entries(byMarketKey).sort((a, b) => b[1] - a[1]).slice(0, 20),
+    fieldCoverage: {
+      withPlayer,
+      withTeam,
+      withGame,
+      withLine,
+      withOverUnder,
+      withBookmaker,
+      withCommenceTime
+    },
+    sampleRows: rows.slice(0, 5).map(compactRow)
+  };
+}
+
 function isoNoMilliseconds(value) {
   return new Date(value).toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
@@ -260,6 +326,7 @@ async function callParlayUrl(url, endpoint, params = {}) {
     if (value != null && value !== '') url.searchParams.set(key, value);
   });
 
+  const startedAt = Date.now();
   const r = await fetch(url.toString(), {
     headers: {
       Accept: 'application/json',
@@ -267,6 +334,7 @@ async function callParlayUrl(url, endpoint, params = {}) {
     },
     signal: AbortSignal.timeout(20000)
   });
+  const elapsedMs = Date.now() - startedAt;
 
   const text = await r.text();
   let payload = null;
@@ -279,6 +347,7 @@ async function callParlayUrl(url, endpoint, params = {}) {
     query: params,
     status: r.status,
     ok: r.ok,
+    elapsedMs,
     creditHeaders: interestingHeaders(r.headers),
     payloadTopLevelKeys: payload && typeof payload === 'object' && !Array.isArray(payload) ? Object.keys(payload) : [],
     rowCount: rows.length,
@@ -338,6 +407,7 @@ module.exports = async function handler(req, res) {
     const auditExpansion = url.searchParams.get('auditExpansion') === '1';
     const auditInventory = url.searchParams.get('auditInventory') === '1';
     const auditMlbShapes = url.searchParams.get('auditMlbShapes') === '1';
+    const auditProductionIssues = url.searchParams.get('auditProductionIssues') === '1';
     const checks = [];
     const bookmakerSeen = {};
     const exchangeSeen = {};
@@ -363,6 +433,142 @@ module.exports = async function handler(req, res) {
       .filter(Boolean)
       .sort();
     const sportsByKey = new Map(sports.rows.map(row => [row.key, row]));
+
+    if (auditProductionIssues) {
+      const startedAt = Date.now();
+      const majorBooks = ['draftkings', 'fanduel', 'betmgm', 'caesars', 'bovada', 'pinnacle', 'bet365', 'fanatics', 'hardrock', 'betrivers'];
+      const mlbBookAudits = [];
+      const mlbBookCases = [];
+      for (const bookmaker of majorBooks) {
+        mlbBookCases.push(
+          [`${bookmaker} all markets one call`, bookmaker, { bookmakers: bookmaker, markets: 'h2h,spreads,totals', oddsFormat: 'american', commenceTimeFrom: timeWindow.commenceTimeFrom, commenceTimeTo: timeWindow.commenceTimeTo }],
+          [`${bookmaker} h2h only`, bookmaker, { bookmakers: bookmaker, markets: 'h2h', oddsFormat: 'american', commenceTimeFrom: timeWindow.commenceTimeFrom, commenceTimeTo: timeWindow.commenceTimeTo }],
+          [`${bookmaker} spreads only`, bookmaker, { bookmakers: bookmaker, markets: 'spreads', oddsFormat: 'american', commenceTimeFrom: timeWindow.commenceTimeFrom, commenceTimeTo: timeWindow.commenceTimeTo }],
+          [`${bookmaker} totals only`, bookmaker, { bookmakers: bookmaker, markets: 'totals', oddsFormat: 'american', commenceTimeFrom: timeWindow.commenceTimeFrom, commenceTimeTo: timeWindow.commenceTimeTo }]
+        );
+      }
+      const bookResults = await Promise.allSettled(mlbBookCases.map(([label, bookmaker, params]) =>
+        callParlay('/sports/baseball_mlb/odds', params).then(result => ({ label, bookmaker, result, elapsedMs: result.elapsedMs }))
+      ));
+      for (const settled of bookResults) {
+        if (settled.status === 'rejected') {
+          mlbBookAudits.push({ ok: false, error: settled.reason?.message || String(settled.reason) });
+          continue;
+        }
+        checks.push(settled.value.result);
+        mlbBookAudits.push({
+          label: settled.value.label,
+          bookmaker: settled.value.bookmaker,
+          status: settled.value.result.status,
+          ok: settled.value.result.ok,
+          creditHeaders: settled.value.result.creditHeaders,
+          responseMs: settled.value.result.elapsedMs,
+          ...summarizeMainLineEvents(settled.value.result.rows)
+        });
+      }
+
+      const propsStarted = Date.now();
+      const props = await callParlay('/sports/baseball_mlb/props', {
+        oddsFormat: 'american',
+        commenceTimeFrom: timeWindow.commenceTimeFrom,
+        commenceTimeTo: timeWindow.commenceTimeTo
+      });
+      props.elapsedMs = Date.now() - propsStarted;
+      checks.push(props);
+
+      const multisport = [];
+      const sportCandidates = [
+        'baseball_mlb',
+        'basketball_wnba',
+        'americanfootball_nfl',
+        'americanfootball_ncaaf',
+        'basketball_ncaab',
+        'basketball_nba',
+        'icehockey_nhl',
+        'mma_mixed_martial_arts',
+        'tennis',
+        'tennis_atp',
+        'tennis_wta'
+      ];
+      const sportCalls = await Promise.allSettled(sportCandidates.map(async sportKey => {
+        const sportRow = sportsByKey.get(sportKey);
+        const odds = sportRow?.active
+          ? await callParlay(`/sports/${sportKey}/odds`, {
+              regions: 'us',
+              markets: 'h2h,spreads,totals',
+              oddsFormat: 'american',
+              commenceTimeFrom: timeWindow.commenceTimeFrom,
+              commenceTimeTo: timeWindow.commenceTimeTo
+            })
+          : null;
+        let propsResult = null;
+        if (sportRow?.active) {
+          try {
+            propsResult = await callParlay(`/sports/${sportKey}/props`, {
+              oddsFormat: 'american',
+              commenceTimeFrom: timeWindow.commenceTimeFrom,
+              commenceTimeTo: timeWindow.commenceTimeTo
+            });
+          } catch (_) {}
+        }
+        return { sportKey, sportRow, odds, propsResult };
+      }));
+      for (const settled of sportCalls) {
+        if (settled.status === 'rejected') {
+          multisport.push({ ok: false, error: settled.reason?.message || String(settled.reason) });
+          continue;
+        }
+        const { sportKey, sportRow, odds, propsResult } = settled.value;
+        if (odds) checks.push(odds);
+        if (propsResult) checks.push(propsResult);
+        multisport.push({
+          sportKey,
+          title: sportRow?.title || null,
+          active: !!sportRow?.active,
+          matcherType: /tennis/i.test(sportKey) ? 'player-vs-player'
+            : /mma/i.test(sportKey) ? 'fighter-vs-fighter'
+            : /football|basketball|baseball|hockey/i.test(sportKey) ? 'team-vs-team'
+            : 'unknown',
+          currentMatcherSupports: SPORTS.includes(sportKey),
+          odds: odds ? {
+            status: odds.status,
+            creditHeaders: odds.creditHeaders,
+            responseMs: odds.elapsedMs,
+            ...summarizeMainLineEvents(odds.rows)
+          } : null,
+          props: propsResult ? {
+            status: propsResult.status,
+            creditHeaders: propsResult.creditHeaders,
+            responseMs: propsResult.elapsedMs,
+            ...summarizePropsRows(propsResult.rows)
+          } : null
+        });
+      }
+
+      return res.status(200).json({
+        ok: true,
+        pulledAt: new Date().toISOString(),
+        elapsedMs: Date.now() - startedAt,
+        currentLookaheadDays: timeWindow.lookaheadDays,
+        timeWindow,
+        mlbMainLineBookAudit: mlbBookAudits,
+        mlbPropsAudit: {
+          status: props.status,
+          ok: props.ok,
+          creditHeaders: props.creditHeaders,
+          responseMs: props.elapsedMs,
+          ...summarizePropsRows(props.rows),
+          canNormalizeIntoSeparatePropMatcher: props.rows.some(row =>
+            (row.player || row.player_name || row.participant) &&
+            (row.line != null || row.point != null || row.strike != null) &&
+            (row.over_price != null || Array.isArray(row.outcomes)) &&
+            (row.under_price != null || Array.isArray(row.outcomes))
+          )
+        },
+        multisportAudit: multisport,
+        checks: checks.map(({ rows, ...check }) => check)
+      });
+    }
 
     const mlbShapeAudit = [];
     if (auditMlbShapes) {
