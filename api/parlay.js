@@ -63,6 +63,17 @@ const SUPPORTED_EXCHANGE_CALLS = [
   { exchange: 'prophetx', sport: 'baseball_mlb' }
 ];
 
+const SUPPLEMENTAL_MLB_H2H_BOOKS = [
+  // Verified via /api/parlay-sources?auditMlbShapes=1 on 2026-06-23:
+  // individual bookmaker queries return the active MLB slate that the all-books
+  // request currently misses.
+  'fanduel',
+  'betmgm',
+  'caesars',
+  'bovada',
+  'pinnacle'
+];
+
 function getLookaheadDays(req) {
   const fallback = Number(process.env.PARLAY_LOOKAHEAD_DAYS || 5);
   let queryDays = null;
@@ -117,6 +128,32 @@ function sportShort(sport) {
 
 function googleUrl(book, away, home) {
   return 'https://www.google.com/search?q=' + encodeURIComponent(`${book} ${away} ${home} odds`);
+}
+
+function marketDedupeKey(market) {
+  const eventDate = String(market.startTime || '').slice(0, 10);
+  return [
+    market.platform,
+    market.sport,
+    market.marketType,
+    market.away,
+    market.home,
+    eventDate,
+    market.line ?? '',
+    market.favoredTeamName || ''
+  ].map(value => String(value || '').toLowerCase()).join('|');
+}
+
+function pushUniqueMarkets(target, candidates, seenKeys) {
+  let added = 0;
+  for (const market of candidates) {
+    const key = marketDedupeKey(market);
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    target.push(market);
+    added += 1;
+  }
+  return added;
 }
 
 function noteSkip(debug, reason) {
@@ -424,6 +461,7 @@ module.exports = async function handler(req, res) {
     const countsBySport = {};
     const exchangesSeen = {};
     const timeWindow = buildTimeWindow(req);
+    const seenMarketKeys = new Set();
 
     for (const sport of SPORTS) {
       const oddsResult = await fetchJson(`/sports/${sport}/odds`, {
@@ -466,7 +504,7 @@ module.exports = async function handler(req, res) {
           countsByBook[m.platform] = (countsByBook[m.platform] || 0) + 1;
           countsBySport[m.sport] = (countsBySport[m.sport] || 0) + 1;
         });
-        markets.push(...normalized);
+        pushUniqueMarkets(markets, normalized, seenMarketKeys);
       }
 
       debug.push({
@@ -483,6 +521,78 @@ module.exports = async function handler(req, res) {
         },
         creditHeaders: creditHeaders(r.headers)
       });
+
+      if (sport === 'baseball_mlb') {
+        for (const bookmaker of SUPPLEMENTAL_MLB_H2H_BOOKS) {
+          const supplementResult = await fetchJson(`/sports/${sport}/odds`, {
+            bookmakers: bookmaker,
+            markets: 'h2h',
+            oddsFormat: 'american',
+            commenceTimeFrom: timeWindow.commenceTimeFrom,
+            commenceTimeTo: timeWindow.commenceTimeTo
+          });
+
+          const sr = supplementResult.response;
+          const sText = supplementResult.text;
+
+          if (!sr.ok) {
+            debug.push({
+              sport,
+              endpoint: `/sports/${sport}/odds`,
+              bookmaker,
+              supplement: 'mlb_h2h_individual_bookmaker',
+              ok: false,
+              status: sr.status,
+              body: sText.slice(0, 800),
+              creditHeaders: creditHeaders(sr.headers)
+            });
+            continue;
+          }
+
+          const supplementJson = supplementResult.json;
+          const supplementAllEvents = Array.isArray(supplementJson)
+            ? supplementJson
+            : (supplementJson.data || supplementJson.events || []);
+          const supplementEvents = supplementAllEvents.filter(ev => inTimeWindow(ev.commence_time, timeWindow));
+          let normalizedCount = 0;
+          let addedCount = 0;
+
+          for (const ev of supplementEvents) {
+            for (const b of ev.bookmakers || []) {
+              const key = normalizeBookKey(b.key);
+              if (!key) continue;
+              rawBooksSeen[key] = b.title || b.key;
+            }
+            const normalized = normalizeEvent(ev, sport, { skipped });
+            normalizedCount += normalized.length;
+            normalized.forEach(m => {
+              booksSeen[m.platform] = m.bookTitle || m.platform;
+              countsByBook[m.platform] = (countsByBook[m.platform] || 0) + 1;
+              countsBySport[m.sport] = (countsBySport[m.sport] || 0) + 1;
+            });
+            addedCount += pushUniqueMarkets(markets, normalized, seenMarketKeys);
+          }
+
+          debug.push({
+            sport,
+            endpoint: `/sports/${sport}/odds`,
+            bookmaker,
+            supplement: 'mlb_h2h_individual_bookmaker',
+            ok: true,
+            events: supplementEvents.length,
+            rawEvents: supplementAllEvents.length,
+            normalized: normalizedCount,
+            added: addedCount,
+            stageCounts: {
+              upstreamRaw: summarizeEvents(supplementAllEvents),
+              afterDateFilter: summarizeEvents(supplementEvents),
+              afterRemovedBookFilter: summarizeEvents(supplementEvents, key => !REMOVED_BOOK_SET.has(key)),
+              afterAllowedBookFilter: summarizeEvents(supplementEvents, key => !REMOVED_BOOK_SET.has(key) && FINAL_BOOK_SET.has(key))
+            },
+            creditHeaders: creditHeaders(sr.headers)
+          });
+        }
+      }
 
       const exchangeCalls = SUPPORTED_EXCHANGE_CALLS.filter(call => call.sport === sport);
 
@@ -518,7 +628,7 @@ module.exports = async function handler(req, res) {
           countsByBook[m.platform] = (countsByBook[m.platform] || 0) + 1;
           countsBySport[m.sport] = (countsBySport[m.sport] || 0) + 1;
         });
-        markets.push(...normalizedExchange);
+        pushUniqueMarkets(markets, normalizedExchange, seenMarketKeys);
 
         debug.push({
           sport,
@@ -531,6 +641,13 @@ module.exports = async function handler(req, res) {
           creditHeaders: creditHeaders(xr.headers)
         });
       }
+    }
+
+    Object.keys(countsByBook).forEach(key => delete countsByBook[key]);
+    Object.keys(countsBySport).forEach(key => delete countsBySport[key]);
+    for (const market of markets) {
+      countsByBook[market.platform] = (countsByBook[market.platform] || 0) + 1;
+      countsBySport[market.sport] = (countsBySport[market.sport] || 0) + 1;
     }
 
     return res.status(200).json({
