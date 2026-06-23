@@ -105,6 +105,11 @@
     .oj-stake-val { font-weight: 600; color: var(--green); }
     .oj-stake-lbl { color: var(--dim); }
     .oj-debug { margin-top: 6px; font-size: 0.62rem; color: var(--dimmer); line-height: 1.45; word-break: break-word; }
+    .alt-books { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+    .alt-book-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 0.66rem; color: var(--dim); }
+    .alt-book-label { text-transform: uppercase; letter-spacing: 0.06em; color: var(--dimmer); margin-right: 2px; }
+    .alt-book-chip { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 6px; padding: 4px 7px; white-space: nowrap; }
+    .alt-book-chip strong { color: var(--green); font-weight: 700; }
     .card-date { font-size: 0.65rem; color: var(--dim); font-family: var(--mono); margin-left: 10px; font-weight: 400; }
 
     /* Calculator */
@@ -1517,6 +1522,57 @@ function bothPlatformsInSet(opp, set) {
   return set.has(opp.legA.platform) && set.has(opp.legB.platform);
 }
 
+function legSideKey(leg) {
+  return humanOutcome(leg.rawTitle || '', leg.outcome).toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function groupedOppKey(opp) {
+  const sides = [legSideKey(opp.legA), legSideKey(opp.legB)].sort().join(' vs ');
+  return [
+    opp.sport,
+    opp.marketType,
+    opp.title,
+    opp.gameDate || '',
+    sides
+  ].map(v => String(v || '').toLowerCase().replace(/\s+/g, ' ').trim()).join('|');
+}
+
+function collectSideBooks(group, primaryLeg) {
+  const side = legSideKey(primaryLeg);
+  const byPlatform = {};
+  group.forEach(opp => {
+    [opp.legA, opp.legB].forEach(leg => {
+      if (legSideKey(leg) !== side) return;
+      const current = byPlatform[leg.platform];
+      if (!current || leg.price < current.price) {
+        byPlatform[leg.platform] = { platform: leg.platform, price: leg.price };
+      }
+    });
+  });
+  return Object.values(byPlatform).sort((a, b) => a.price - b.price);
+}
+
+function groupOpportunities(opps) {
+  const groups = new Map();
+  (opps || []).forEach(opp => {
+    const key = groupedOppKey(opp);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(opp);
+  });
+  return [...groups.values()].map(group => {
+    const primary = [...group].sort((a, b) => b.margin - a.margin)[0];
+    return {
+      ...primary,
+      id: primary.id + '::grouped',
+      groupedCount: group.length,
+      alternatives: {
+        legA: collectSideBooks(group, primary.legA),
+        legB: collectSideBooks(group, primary.legB)
+      }
+    };
+  }).sort((a, b) => b.margin - a.margin);
+}
+
 function probToAmerican(p) {
   if (!p || p <= 0 || p >= 1) return '—';
   return p >= 0.5
@@ -1568,6 +1624,37 @@ function ProphetXDebug({ debug }) {
   return (
     <div className="oj-debug">
       ProphetX API last_update {debug.lastUpdate || 'n/a'} · raw O/U {String(debug.rawOverPrice ?? 'n/a')}/{String(debug.rawUnderPrice ?? 'n/a')} · converted {String(debug.overAmerican ?? 'n/a')}/{String(debug.underAmerican ?? 'n/a')} · market_key {debug.marketKey || 'n/a'} · strike {String(debug.strike ?? 'n/a')}
+    </div>
+  );
+}
+
+function AlsoAvailable({ opp }) {
+  const alt = opp.alternatives || {};
+  const rows = [
+    { label: humanOutcome(opp.legA.rawTitle, opp.legA.outcome), books: alt.legA || [] },
+    { label: humanOutcome(opp.legB.rawTitle, opp.legB.outcome), books: alt.legB || [] }
+  ].filter(row => row.books.length > 1);
+
+  if (!rows.length) return null;
+
+  return (
+    <div className="alt-books">
+      {opp.groupedCount > 1 && (
+        <div className="alt-book-row">
+          <span className="alt-book-label">Combined</span>
+          <span>{opp.groupedCount} equivalent book pair{opp.groupedCount === 1 ? '' : 's'} for this play</span>
+        </div>
+      )}
+      {rows.map(row => (
+        <div className="alt-book-row" key={row.label}>
+          <span className="alt-book-label">{row.label}</span>
+          {row.books.map(book => (
+            <span key={`${row.label}-${book.platform}`} className="alt-book-chip">
+              {PLAT_LB[book.platform] || book.platform} <strong>{probToAmerican(book.price)}</strong>
+            </span>
+          ))}
+        </div>
+      ))}
     </div>
   );
 }
@@ -1644,6 +1731,8 @@ function ArbCard({ opp }) {
         <div className="oj-vs">VS</div>
         <ArbLeg leg={legB} stake={stakeB} onStakeChange={handleStakeB} label="LEG 2" />
       </div>
+
+      <AlsoAvailable opp={opp} />
 
       {/* Quick stake buttons */}
       <div className="oj-quick-row">
@@ -1971,11 +2060,13 @@ function App() {
   const visibleOpp = (o) => visibleByBooks(o) && visibleBySource(o);
   const fArbs = (filter === 'all' ? arbs : arbs.filter(a => a.sport === filter)).filter(visibleOpp);
   const fNear = (filter === 'all' ? near : near.filter(a => a.sport === filter)).filter(visibleOpp);
-  const shownOpps = [...fArbs, ...fNear];
+  const groupedArbs = groupOpportunities(fArbs);
+  const groupedNear = groupOpportunities(fNear);
+  const shownOpps = [...groupedArbs, ...groupedNear];
   const shownSportsbookCards = shownOpps.filter(o => involvesPlatformSet(o, sportsbookSet)).length;
   const shownPairCounts = topEntries(countOppsByPlatform(shownOpps), 20);
   const totalMkts = Object.values(markets).reduce((s,m) => s + m.length, 0);
-  const bestM = fArbs.length > 0 ? fArbs[0].margin : null;
+  const bestM = groupedArbs.length > 0 ? groupedArbs[0].margin : null;
 
   const toggleBook = (book) => {
     setEnabledBooks(prev => prev.includes(book) ? prev.filter(b => b !== book) : [...prev, book]);
@@ -2015,11 +2106,11 @@ function App() {
       {!firstLoad && (
         <div className="stats-bar">
           <div className="stat">
-            <div className="stat-val" style={{color: fArbs.length > 0 ? 'var(--green)' : 'var(--dim)'}}>{fArbs.length}</div>
+            <div className="stat-val" style={{color: groupedArbs.length > 0 ? 'var(--green)' : 'var(--dim)'}}>{groupedArbs.length}</div>
             <div className="stat-lbl">Live Arbs</div>
           </div>
           <div className="stat">
-            <div className="stat-val" style={{color: fNear.length > 0 ? 'var(--yellow)' : 'var(--dim)'}}>{fNear.length}</div>
+            <div className="stat-val" style={{color: groupedNear.length > 0 ? 'var(--yellow)' : 'var(--dim)'}}>{groupedNear.length}</div>
             <div className="stat-lbl">Near-Arbs</div>
           </div>
           <div className="stat">
@@ -2109,11 +2200,11 @@ function App() {
         <>
           <div className="sec-hdr">
             Live Arbitrage Opportunities
-            {fArbs.length > 0 && <span className="sec-count">{fArbs.length}</span>}
+            {groupedArbs.length > 0 && <span className="sec-count">{groupedArbs.length}</span>}
           </div>
 
-          {fArbs.length > 0
-            ? <div className="cards">{fArbs.map(o => <ArbCard key={o.id} opp={o} />)}</div>
+          {groupedArbs.length > 0
+            ? <div className="cards">{groupedArbs.map(o => <ArbCard key={o.id} opp={o} />)}</div>
             : <div className="empty">
                 <div className="empty-icon">◎</div>
                 <div>No arbitrage opportunities{filter !== 'all' ? ` in ${FILTER_LB[filter]}` : ''} right now.</div>
@@ -2127,12 +2218,12 @@ function App() {
             <div className="near-section">
               <button className="near-hdr-btn" onClick={() => setNearOpen(!nearOpen)}>
                 <span className={`chev${nearOpen?' open':''}`}>▶</span>
-                Near-arbs ({fNear.length}) — within 2% of profitable
+                Near-arbs ({groupedNear.length}) — within 2% of profitable
               </button>
-              {nearOpen && fNear.length > 0 && (
-                <div className="cards">{fNear.map(o => <ArbCard key={o.id} opp={o} />)}</div>
+              {nearOpen && groupedNear.length > 0 && (
+                <div className="cards">{groupedNear.map(o => <ArbCard key={o.id} opp={o} />)}</div>
               )}
-              {nearOpen && fNear.length === 0 && (
+              {nearOpen && groupedNear.length === 0 && (
                 <div style={{padding:'16px 0',fontSize:'0.72rem',color:'var(--dimmer)'}}>No near-arbs found.</div>
               )}
             </div>
