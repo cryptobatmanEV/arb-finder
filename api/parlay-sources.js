@@ -168,6 +168,32 @@ function compactRow(row) {
   };
 }
 
+function summarizeOddsRows(rows) {
+  const bookmakerKeys = {};
+  let marketCount = 0;
+  let outcomeCount = 0;
+
+  for (const ev of rows || []) {
+    for (const book of ev.bookmakers || []) {
+      const key = sourceKey(book);
+      if (key) bookmakerKeys[key] = (bookmakerKeys[key] || 0) + 1;
+      for (const market of book.markets || []) {
+        marketCount += 1;
+        outcomeCount += (market.outcomes || []).length;
+      }
+    }
+  }
+
+  return {
+    rawEventCount: rows.length,
+    bookmakerKeysSeen: Object.keys(bookmakerKeys).sort(),
+    bookmakerEventCounts: bookmakerKeys,
+    rawMarketCount: marketCount,
+    rawOutcomeCount: outcomeCount,
+    first3Events: rows.slice(0, 3).map(compactRow)
+  };
+}
+
 async function callParlay(path, params = {}) {
   const url = new URL(`${BASE}${path}`);
   Object.entries(params).forEach(([key, value]) => {
@@ -249,6 +275,7 @@ module.exports = async function handler(req, res) {
   try {
     const url = new URL(req.url || '', 'https://arb-finder.local');
     const auditExpansion = url.searchParams.get('auditExpansion') === '1';
+    const auditInventory = url.searchParams.get('auditInventory') === '1';
     const checks = [];
     const bookmakerSeen = {};
     const exchangeSeen = {};
@@ -274,6 +301,47 @@ module.exports = async function handler(req, res) {
       .filter(Boolean)
       .sort();
     const sportsByKey = new Map(sports.rows.map(row => [row.key, row]));
+
+    const inventoryAudit = [];
+    if (auditInventory) {
+      for (const sport of SPORTS) {
+        const withDate = await callParlay(`/sports/${sport}/odds`, {
+          regions: 'us',
+          markets: 'h2h,spreads,totals',
+          oddsFormat: 'american',
+          commenceTimeFrom: timeWindow.commenceTimeFrom,
+          commenceTimeTo: timeWindow.commenceTimeTo
+        });
+        checks.push(withDate);
+
+        const withoutDate = await callParlay(`/sports/${sport}/odds`, {
+          regions: 'us',
+          markets: 'h2h,spreads,totals',
+          oddsFormat: 'american'
+        });
+        checks.push(withoutDate);
+
+        inventoryAudit.push({
+          sport,
+          withDateFilter: {
+            endpoint: withDate.endpoint,
+            query: withDate.query,
+            status: withDate.status,
+            ok: withDate.ok,
+            creditHeaders: withDate.creditHeaders,
+            ...summarizeOddsRows(withDate.rows)
+          },
+          withoutDateFilter: {
+            endpoint: withoutDate.endpoint,
+            query: withoutDate.query,
+            status: withoutDate.status,
+            ok: withoutDate.ok,
+            creditHeaders: withoutDate.creditHeaders,
+            ...summarizeOddsRows(withoutDate.rows)
+          }
+        });
+      }
+    }
 
     for (const sport of SPORTS) {
       const odds = await callParlay(`/sports/${sport}/odds`, {
@@ -446,6 +514,8 @@ module.exports = async function handler(req, res) {
       expansionAudit,
       propsAudit,
       eventsAudit,
+      inventoryAuditEnabled: auditInventory,
+      inventoryAudit,
       checks: cleanChecks
     });
   } catch (err) {

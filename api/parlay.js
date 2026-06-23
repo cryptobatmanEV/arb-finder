@@ -128,6 +128,39 @@ function normalizeBookKey(key) {
   return String(key || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+function summarizeEvents(events, predicate = () => true) {
+  const books = {};
+  let eventCount = 0;
+  let bookmakerEntryCount = 0;
+  let marketCount = 0;
+  let outcomeCount = 0;
+
+  for (const ev of events || []) {
+    let eventIncluded = false;
+    for (const book of ev.bookmakers || []) {
+      const key = normalizeBookKey(book.key);
+      if (!key || !predicate(key)) continue;
+      eventIncluded = true;
+      bookmakerEntryCount += 1;
+      books[key] = (books[key] || 0) + 1;
+      for (const market of book.markets || []) {
+        marketCount += 1;
+        outcomeCount += (market.outcomes || []).length;
+      }
+    }
+    if (eventIncluded) eventCount += 1;
+  }
+
+  return {
+    eventCount,
+    bookmakerEntryCount,
+    bookmakerKeysSeen: Object.keys(books).sort(),
+    bookmakerEventCounts: books,
+    marketCount,
+    outcomeCount
+  };
+}
+
 function normalizeEvent(ev, sport, debug) {
   const out = [];
   const home = ev.home_team;
@@ -442,6 +475,12 @@ module.exports = async function handler(req, res) {
         ok: true,
         events: events.length,
         rawEvents: allEvents.length,
+        stageCounts: {
+          upstreamRaw: summarizeEvents(allEvents),
+          afterDateFilter: summarizeEvents(events),
+          afterRemovedBookFilter: summarizeEvents(events, key => !REMOVED_BOOK_SET.has(key)),
+          afterAllowedBookFilter: summarizeEvents(events, key => !REMOVED_BOOK_SET.has(key) && FINAL_BOOK_SET.has(key))
+        },
         creditHeaders: creditHeaders(r.headers)
       });
 

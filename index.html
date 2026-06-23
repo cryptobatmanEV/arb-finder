@@ -2080,6 +2080,12 @@ function App() {
         </div>
       )}
 
+      {parlayDebug && parlayDebug.sportsbookMarketsNormalized <= 1 && (
+        <div className="err-banner" style={{borderColor:'rgba(245,200,66,0.28)', color:'rgba(245,200,66,0.9)', background:'rgba(245,200,66,0.06)'}}>
+          Sportsbook feed loaded, but ParlayAPI returned only {parlayDebug.sportsbookMarketsNormalized || 0} sportsbook market{(parlayDebug.sportsbookMarketsNormalized || 0) === 1 ? '' : 's'}. No sportsbook arbs are available right now.
+        </div>
+      )}
+
       {firstLoad && loading ? (
         <div className="cards">{[1,2,3].map(i=><div key={i} className="skel skel-card"/>)}</div>
       ) : (
