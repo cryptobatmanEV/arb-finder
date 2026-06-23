@@ -281,7 +281,7 @@ function sportsbookDiagnostics(markets) {
     rawMarketsByBook: byBook,
     normalizedMarketsBySport: bySport,
     normalizedMarketsByBook: byBook,
-    normalizedMarketsByMarketType,
+    normalizedMarketsByMarketType: normalizedByMarketType,
     matchedPairsByMarketType,
     matchedPairCount: comparisons.length,
     liveArbCount,
