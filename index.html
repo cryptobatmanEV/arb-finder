@@ -199,7 +199,7 @@ const CORE_PLATFORMS = ['polymarket','kalshi','novig','fliff'];
 const PARLAY_BOOKS = [
   'draftkings','fanduel','pinnacle','bovada','kalshi','novig','bet365',
   'betmgm','betrivers','caesars','parx','fanatics','hardrock','fliff',
-  'tipico','stake','sugarhouse','prophetx'
+  'tipico','stake','sugarhouse'
 ];
 const ALL_BOOK_FILTERS = [...new Set([...CORE_PLATFORMS, ...PARLAY_BOOKS])];
 const PLAT_LB  = {
@@ -207,14 +207,14 @@ const PLAT_LB  = {
   draftkings:'DraftKings', fanduel:'FanDuel', pinnacle:'Pinnacle', bovada:'Bovada',
   betmgm:'BetMGM', caesars:'Caesars', fanatics:'Fanatics', betrivers:'BetRivers',
   bet365:'Bet365', parx:'Parx', hardrock:'Hard Rock', tipico:'Tipico',
-  stake:'Stake', sugarhouse:'SugarHouse', prophetx:'ProphetX'
+  stake:'Stake', sugarhouse:'SugarHouse'
 };
 const PLAT_CLS = {
   polymarket:'pm-c', kalshi:'ka-c', novig:'nv-c', fliff:'fl-c',
   draftkings:'pa-c', fanduel:'pa-c', pinnacle:'pa-c', bovada:'pa-c',
   betmgm:'pa-c', caesars:'pa-c', fanatics:'pa-c', betrivers:'pa-c',
   bet365:'pa-c', parx:'pa-c', hardrock:'pa-c', tipico:'pa-c',
-  stake:'pa-c', sugarhouse:'pa-c', prophetx:'pa-c'
+  stake:'pa-c', sugarhouse:'pa-c'
 };
 const FILTERS  = ['all','mlb','nba','nfl','nhl','crypto','other'];
 const FILTER_LB = { all:'All', mlb:'MLB', nba:'NBA', nfl:'NFL', nhl:'NHL', crypto:'Crypto', other:'Other' };
@@ -1728,6 +1728,7 @@ function App() {
   const [pairs,    setPairs]    = useState(0);
   const [loading,  setLoading]  = useState(false);
   const [parlayLoading, setParlayLoading] = useState(false);
+  const [refreshCooldown, setRefreshCooldown] = useState(false);
   const [lastUp,   setLastUp]   = useState(null);
   const [parlayUp, setParlayUp] = useState(null);
   const [countdown,setCdown]    = useState(REFRESH_SECS);
@@ -1807,27 +1808,42 @@ function App() {
     setLoading(false);
     setFirst(false);
     setCdown(REFRESH_SECS);
+    return mkts;
   }, [recalc, status.parlay]);
 
-  const pullParlay = useCallback(async () => {
+  const pullParlay = useCallback(async (baseMarkets = markets) => {
     setParlayLoading(true);
     setStatus(prev => ({ ...prev, parlay:'loading' }));
     try {
       const d = await fetchParlay();
       parlayRef.current = d;
-      const next = { ...markets, parlay: d };
+      const next = { ...baseMarkets, parlay: d };
       setMarkets(next);
       setStatus(prev => ({ ...prev, parlay:'ok' }));
       setErrors(prev => { const e = { ...prev }; delete e.parlay; return e; });
       setParlayUp(new Date());
       const matchStats = recalc(next);
       setParlayDebug({ ...(window.__PARLAY_DEBUG || {}), ...matchStats });
+      return next;
     } catch (e) {
       setStatus(prev => ({ ...prev, parlay:'error' }));
       setErrors(prev => ({ ...prev, parlay: e.message }));
+      return baseMarkets;
+    } finally {
+      setParlayLoading(false);
     }
-    setParlayLoading(false);
   }, [markets, recalc]);
+
+  const refreshOdds = useCallback(async () => {
+    if (loading || parlayLoading || refreshCooldown) return;
+    setRefreshCooldown(true);
+    try {
+      const coreMarkets = await refresh();
+      await pullParlay(coreMarkets);
+    } finally {
+      setTimeout(() => setRefreshCooldown(false), 2500);
+    }
+  }, [loading, parlayLoading, refreshCooldown, refresh, pullParlay]);
 
   useEffect(() => { refresh(); }, []);
   useEffect(() => {
@@ -1857,16 +1873,18 @@ function App() {
         <div className="hdr-right">
           {lastUp && (
             <div style={{textAlign:'right'}}>
-              <div className="timestamp">Core updated {lastUp.toLocaleTimeString()}</div>
+              <div className="timestamp">Last core refresh {lastUp.toLocaleTimeString()}</div>
               <div className="countdown">free books refresh in {countdown}s</div>
-              {parlayUp && <div className="countdown">sportsbook odds pulled {parlayUp.toLocaleTimeString()}</div>}
+              {parlayUp && <div className="countdown">Last sportsbook refresh {parlayUp.toLocaleTimeString()}</div>}
             </div>
           )}
-          <button className="btn-refresh" onClick={refresh} disabled={loading}>
-            {loading ? 'Scanning...' : 'Refresh Free Books'}
-          </button>
-          <button className="btn-refresh" onClick={pullParlay} disabled={parlayLoading} title="Manual only to save ParlayAPI credits">
-            {parlayLoading ? 'Pulling...' : 'Pull Sportsbook Odds'}
+          <button
+            className="btn-refresh"
+            onClick={refreshOdds}
+            disabled={loading || parlayLoading || refreshCooldown}
+            title="Refreshes free books and manually pulls cached sportsbook odds"
+          >
+            {loading || parlayLoading ? 'Refreshing...' : refreshCooldown ? 'Cooling down...' : 'Refresh Odds'}
           </button>
         </div>
       </div>
