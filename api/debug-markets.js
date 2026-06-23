@@ -1,9 +1,0 @@
-{
-  polymarketCount,
-  kalshiCount,
-  novigCount,
-  fliffCount,
-  parlayCount,
-  totalCount,
-  sampleMarkets
-}
