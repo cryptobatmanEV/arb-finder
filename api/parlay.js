@@ -92,6 +92,32 @@ const SUPPLEMENTAL_MLB_BOOK_CALLS = [
   { bookmaker: 'betrivers', markets: 'h2h,spreads,totals' }
 ];
 
+const SAFE_MLB_PROP_MARKETS = new Set([
+  'player_hits',
+  'player_total_bases',
+  'player_rbis',
+  'player_hits_runs_rbis',
+  'player_runs',
+  'player_doubles',
+  'player_singles',
+  'player_stolen_bases',
+  'player_pitcher_strikeouts',
+  'player_strikeouts'
+]);
+
+const PROP_MARKET_LABELS = {
+  player_hits: 'Hits',
+  player_total_bases: 'Total Bases',
+  player_rbis: 'RBIs',
+  player_hits_runs_rbis: 'Hits + Runs + RBIs',
+  player_runs: 'Runs',
+  player_doubles: 'Doubles',
+  player_singles: 'Singles',
+  player_stolen_bases: 'Stolen Bases',
+  player_pitcher_strikeouts: 'Strikeouts',
+  player_strikeouts: 'Strikeouts'
+};
+
 function getLookaheadDays(req) {
   const fallback = Number(process.env.PARLAY_LOOKAHEAD_DAYS || 5);
   let queryDays = null;
@@ -158,7 +184,9 @@ function marketDedupeKey(market) {
     market.home,
     eventDate,
     market.line ?? '',
-    market.favoredTeamName || ''
+    market.favoredTeamName || '',
+    market.player || '',
+    market.statType || ''
   ].map(value => String(value || '').toLowerCase()).join('|');
 }
 
@@ -537,6 +565,66 @@ function normalizeExchangeMarket(exchangeKey, m, sport, debug) {
   };
 }
 
+function normalizePropRow(row, sport, debug) {
+  const platform = normalizeBookKey(row.bookmaker || row.bookmaker_key || row.bookmakerKey);
+  const bookTitle = row.bookmaker_title || row.bookmaker || platform;
+  const marketKey = String(row.market_key || '').toLowerCase();
+  const player = String(row.player || row.player_name || '').trim();
+  const home = row.home_team;
+  const away = row.away_team;
+  const startTime = row.commence_time || row.start_time || row.startTime;
+  const line = row.line ?? row.point ?? row.strike;
+
+  if (!platform || !player || !home || !away || !startTime || line == null) {
+    noteSkip(debug, 'prop_missing_required_fields');
+    return null;
+  }
+  if (REMOVED_BOOK_SET.has(platform)) {
+    noteSkip(debug, `excluded_book_${platform}`);
+    return null;
+  }
+  if (!FINAL_BOOK_SET.has(platform)) {
+    noteSkip(debug, `unsupported_book_${platform}`);
+    return null;
+  }
+  if (!SAFE_MLB_PROP_MARKETS.has(marketKey)) {
+    noteSkip(debug, `prop_unsupported_market_${marketKey || 'missing'}`);
+    return null;
+  }
+  if (/_alt\b|milestone|fantasy|1st_|4th_|anytime|first|moneyline/i.test(marketKey)) {
+    noteSkip(debug, `prop_unsafe_market_${marketKey}`);
+    return null;
+  }
+
+  const yesPrice = implied(row.over_price);
+  const noPrice = implied(row.under_price);
+  if (!yesPrice || !noPrice) {
+    noteSkip(debug, 'prop_missing_prices');
+    return null;
+  }
+
+  const label = PROP_MARKET_LABELS[marketKey] || marketKey.replace(/^player_/, '').replace(/_/g, ' ');
+  return {
+    id: `${row.event_id || row.id || `${away}-${home}-${startTime}`}-${platform}-${marketKey}-${player}-${line}`,
+    source: 'parlay',
+    platform,
+    bookTitle,
+    sport: sportShort(sport),
+    marketType: 'prop',
+    home,
+    away,
+    startTime,
+    line: Number(line),
+    player: player.toLowerCase(),
+    statType: marketKey,
+    yesPrice,
+    noPrice,
+    rawTitle: `${player}: ${label} O/U ${line}`,
+    noTitle: `${player}: ${label} O/U ${line}`,
+    url: googleUrl(bookTitle, player, label)
+  };
+}
+
 function creditHeaders(headers) {
   const out = {};
   headers.forEach((value, key) => {
@@ -580,9 +668,11 @@ function listFromPayload(payload) {
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   let forceFresh = false;
+  let includeProps = false;
   try {
     const url = new URL(req.url || '', 'https://arb-finder.local');
     forceFresh = url.searchParams.get('fresh') === '1';
+    includeProps = url.searchParams.get('props') === '1';
   } catch (_) {}
   res.setHeader('Cache-Control', forceFresh ? 'no-store' : 's-maxage=300, stale-while-revalidate=600');
 
@@ -642,6 +732,18 @@ module.exports = async function handler(req, res) {
         endpoint: `/exchange/${call.sport}/markets`,
         exchange: call.exchange,
         params: { exchange: call.exchange }
+      });
+    }
+    if (includeProps) {
+      plannedCalls.push({
+        kind: 'props',
+        sport: 'baseball_mlb',
+        endpoint: '/sports/baseball_mlb/props',
+        params: {
+          oddsFormat: 'american',
+          commenceTimeFrom: timeWindow.commenceTimeFrom,
+          commenceTimeTo: timeWindow.commenceTimeTo
+        }
       });
     }
 
@@ -725,6 +827,30 @@ module.exports = async function handler(req, res) {
         continue;
       }
 
+      if (call.kind === 'props') {
+        const allRows = listFromPayload(result.json);
+        const rows = allRows.filter(row => inTimeWindow(row.commence_time || row.start_time || row.startTime, timeWindow));
+        const normalizedProps = rows
+          .map(row => normalizePropRow(row, call.sport, { skipped }))
+          .filter(Boolean);
+
+        normalizedProps.forEach(m => {
+          booksSeen[m.platform] = m.bookTitle || m.platform;
+          rawBooksSeen[m.platform] = m.bookTitle || m.platform;
+        });
+        const added = pushUniqueMarkets(markets, normalizedProps, seenMarketKeys);
+
+        debug.push({
+          ...baseDebug,
+          ok: true,
+          rows: rows.length,
+          rawRows: allRows.length,
+          normalized: normalizedProps.length,
+          added
+        });
+        continue;
+      }
+
       const json = result.json;
       const allEvents = Array.isArray(json) ? json : (json.data || json.events || []);
       const events = allEvents.filter(ev => inTimeWindow(ev.commence_time, timeWindow));
@@ -790,6 +916,7 @@ module.exports = async function handler(req, res) {
         exchangeCommenceTimeFiltering: 'server_side_only'
       },
       supportedExchangeCalls: SUPPORTED_EXCHANGE_CALLS,
+      includeProps,
       exchangesSeen,
       countsByBook,
       countsBySport,

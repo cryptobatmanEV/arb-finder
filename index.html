@@ -195,6 +195,7 @@
 <div id="root"></div>
 <script type="text/babel">
 const { useState, useEffect, useCallback } = React;
+const DEBUG_MODE = new URLSearchParams(window.location.search).get('debug') === '1';
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
 const REFRESH_SECS = 60;
@@ -228,6 +229,8 @@ const FILTERS  = ['all','mlb','nba','nfl','nhl','crypto','other'];
 const FILTER_LB = { all:'All', mlb:'MLB', nba:'NBA', nfl:'NFL', nhl:'NHL', crypto:'Crypto', other:'Other' };
 const SOURCE_FILTERS = ['all','core','sportsbook','exchange'];
 const SOURCE_FILTER_LB = { all:'All', core:'Core only', sportsbook:'Sportsbook only', exchange:'Exchange only' };
+const MARKET_FILTERS = ['all','main','player_props','moneyline','spread','total','prop'];
+const MARKET_FILTER_LB = { all:'All', main:'Main Lines', player_props:'Player Props', moneyline:'Moneyline', spread:'Spread', total:'Total', prop:'Props' };
 
 // ─── TEAM NORMALIZATION ───────────────────────────────────────────────────────
 const TEAM_MAP = {
@@ -1007,7 +1010,9 @@ function calcArb(mA, mB) {
 
   // Build display title
   const ABBR = {okc:'OKC',phx:'PHX',den:'DEN',min:'MIN',det:'DET',orl:'ORL',nyk:'NYK',atl:'ATL',bos:'BOS',mia:'MIA',mil:'MIL',sas:'SAS',por:'POR',lal:'LAL',lac:'LAC',gsw:'GSW',hou:'HOU',ind:'IND',cle:'CLE',chi:'CHI',tor:'TOR',phi:'PHI',mem:'MEM',nop:'NOP',sac:'SAC',dal:'DAL',uta:'UTA',was:'WAS',nyy:'NYY',nym:'NYM',lad:'LAD',laa:'LAA',chc:'CHC',cws:'CWS',stl:'STL',sd:'SD',sf:'SF',tex:'TEX',sea:'SEA',kc:'KC',oak:'OAK',bal:'BAL',tb:'TB',wsh:'WSH',col:'COL',ari:'ARI',pit:'PIT',cin:'CIN'};
-  const title = mA.teams.length > 0
+  const title = mA.marketType === 'prop'
+    ? (mA.rawTitle || mB.rawTitle)
+    : mA.teams.length > 0
     ? mA.teams.map(t => ABBR[t] || t.toUpperCase()).join(' vs ')
     : mA.rawTitle;
 
@@ -1423,9 +1428,11 @@ function extractParlayStructure(m, debug = null) {
   };
 }
 
-async function fetchParlay({ forceFresh = false } = {}) {
-  const cached = localStorage.getItem('parlayMarketsCache');
-  const cachedAt = Number(localStorage.getItem('parlayMarketsCacheAt') || 0);
+async function fetchParlay({ forceFresh = false, includeProps = false } = {}) {
+  const cacheKey = includeProps ? 'parlayMarketsCacheProps' : 'parlayMarketsCache';
+  const cacheAtKey = includeProps ? 'parlayMarketsCachePropsAt' : 'parlayMarketsCacheAt';
+  const cached = localStorage.getItem(cacheKey);
+  const cachedAt = Number(localStorage.getItem(cacheAtKey) || 0);
   const fiveMin = 5 * 60 * 1000;
 
   const normalizeRaw = (raw, meta = {}) => {
@@ -1454,7 +1461,7 @@ async function fetchParlay({ forceFresh = false } = {}) {
     });
     debug.normalizedCount = normalized.length;
     window.__PARLAY_DEBUG = debug;
-    console.info('[ParlayAPI] normalization debug', debug);
+    console.debug('[ParlayAPI] normalization debug', debug);
     if (Object.keys(debug.dropped).length) console.table(debug.dropped);
     return normalized;
   };
@@ -1463,10 +1470,12 @@ async function fetchParlay({ forceFresh = false } = {}) {
     try { return normalizeRaw(JSON.parse(cached), { fromCache: true }); } catch (_) {}
   }
 
-  const data = forceFresh ? await fetchRaw('/api/parlay?fresh=1') : await fetchCachedRaw('/api/parlay');
+  const qs = includeProps ? '?props=1' : '';
+  const freshQs = includeProps ? '?fresh=1&props=1' : '?fresh=1';
+  const data = forceFresh ? await fetchRaw('/api/parlay' + freshQs) : await fetchCachedRaw('/api/parlay' + qs);
   const raw = data.markets || (Array.isArray(data) ? data : []);
-  localStorage.setItem('parlayMarketsCache', JSON.stringify(raw));
-  localStorage.setItem('parlayMarketsCacheAt', String(Date.now()));
+  localStorage.setItem(cacheKey, JSON.stringify(raw));
+  localStorage.setItem(cacheAtKey, String(Date.now()));
   return normalizeRaw(raw, {
     booksSeen: data.booksSeen || null,
     backendDiagnostics: data.sportsbookDiagnostics || null,
@@ -1900,6 +1909,8 @@ function App() {
   const [countdown,setCdown]    = useState(REFRESH_SECS);
   const [filter,   setFilter]   = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
+  const [marketFilter, setMarketFilter] = useState('all');
+  const [includeProps, setIncludeProps] = useState(false);
   const [enabledBooks, setEnabledBooks] = useState(() => {
     try { return JSON.parse(localStorage.getItem('enabledBooks') || 'null') || ALL_BOOK_FILTERS; }
     catch (_) { return ALL_BOOK_FILTERS; }
@@ -1967,7 +1978,7 @@ function App() {
       window.__PARLAY_DEBUG.matchedPairs = parlayMatchedPairs;
       window.__PARLAY_DEBUG.arbOrNearPairs = parlayArbOrNearPairs;
       Object.assign(window.__PARLAY_DEBUG, debugCounts);
-      console.info('[ParlayAPI] match debug', {
+      console.debug('[ParlayAPI] match debug', {
         matchedPairsInvolvingParlay: parlayMatchedPairs,
         arbsOrNearArbsInvolvingParlay: parlayArbOrNearPairs,
         ...debugCounts
@@ -2006,7 +2017,7 @@ function App() {
     setParlayLoading(true);
     setStatus(prev => ({ ...prev, parlay:'loading' }));
     try {
-      const d = await fetchParlay({ forceFresh: true });
+      const d = await fetchParlay({ forceFresh: true, includeProps });
       if (d.length === 0 && (parlayRef.current || []).length > 0) {
         throw new Error('Sportsbook refresh returned zero markets; keeping previous successful load');
       }
@@ -2026,7 +2037,7 @@ function App() {
     } finally {
       setParlayLoading(false);
     }
-  }, [markets, recalc]);
+  }, [markets, recalc, includeProps]);
 
   const refreshOdds = useCallback(async () => {
     if (loading || parlayLoading || refreshCooldown) return;
@@ -2057,7 +2068,13 @@ function App() {
     if (sourceFilter === 'exchange') return involvesPlatformSet(o, exchangeSet);
     return true;
   };
-  const visibleOpp = (o) => visibleByBooks(o) && visibleBySource(o);
+  const visibleByMarket = (o) => {
+    if (marketFilter === 'main') return ['moneyline','spread','total'].includes(o.marketType);
+    if (marketFilter === 'player_props') return o.marketType === 'prop';
+    if (['moneyline','spread','total','prop'].includes(marketFilter)) return o.marketType === marketFilter;
+    return true;
+  };
+  const visibleOpp = (o) => visibleByBooks(o) && visibleBySource(o) && visibleByMarket(o);
   const fArbs = (filter === 'all' ? arbs : arbs.filter(a => a.sport === filter)).filter(visibleOpp);
   const fNear = (filter === 'all' ? near : near.filter(a => a.sport === filter)).filter(visibleOpp);
   const groupedArbs = groupOpportunities(fArbs);
@@ -2146,6 +2163,17 @@ function App() {
             {SOURCE_FILTER_LB[f]}
           </button>
         ))}
+        <button className={`fbtn${includeProps?' active':''}`} onClick={() => setIncludeProps(v => !v)}>
+          {includeProps ? 'Main Lines + Props' : 'Main Lines'}
+        </button>
+      </div>
+
+      <div className="filters" style={{marginTop:'-10px'}}>
+        {MARKET_FILTERS.map(f => (
+          <button key={f} className={`fbtn${marketFilter===f?' active':''}`} onClick={() => setMarketFilter(f)}>
+            {MARKET_FILTER_LB[f]}
+          </button>
+        ))}
       </div>
 
       <div className="book-filters">
@@ -2164,7 +2192,7 @@ function App() {
         </div>
       </div>
 
-      {parlayDebug && (
+      {DEBUG_MODE && parlayDebug && (
         <div className="countdown" style={{margin:'8px 0 18px'}}>
           Parlay debug: raw {parlayDebug.rawCount?.toLocaleString?.() || 0} · normalized {parlayDebug.normalizedCount?.toLocaleString?.() || 0} ·
           missing teams {parlayDebug.dropped?.missing_team_abbreviation || 0} · invalid prices {parlayDebug.dropped?.missing_invalid_prices || 0} ·
@@ -2172,7 +2200,7 @@ function App() {
         </div>
       )}
 
-      {parlayDebug && (
+      {DEBUG_MODE && parlayDebug && (
         <div className="countdown" style={{margin:'-10px 0 18px'}}>
           Sportsbook debug: platforms {(parlayDebug.sportsbookPlatformsSeen || []).join(', ') || 'none'} Â· normalized {parlayDebug.sportsbookMarketsNormalized || 0} Â· matched pairs {parlayDebug.sportsbookMatchedPairs || 0} Â· result cards shown {shownSportsbookCards}
           <br />
