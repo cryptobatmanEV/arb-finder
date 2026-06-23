@@ -51,6 +51,22 @@ const REMOVED_BOOK_KEYS = [
 
 const FINAL_BOOK_SET = new Set(FINAL_BOOK_KEYS);
 const REMOVED_BOOK_SET = new Set(REMOVED_BOOK_KEYS);
+const SPORTSBOOK_BOOK_SET = new Set([
+  'draftkings',
+  'fanduel',
+  'betmgm',
+  'caesars',
+  'bovada',
+  'bet365',
+  'fanatics',
+  'hardrock',
+  'betrivers',
+  'pinnacle',
+  'stake',
+  'sugarhouse',
+  'tipico'
+]);
+const CALL_TIMEOUT_MS = Number(process.env.PARLAY_CALL_TIMEOUT_MS || 9000);
 
 const EXCHANGE_TITLES = {
   novig: 'Novig',
@@ -63,15 +79,17 @@ const SUPPORTED_EXCHANGE_CALLS = [
   { exchange: 'prophetx', sport: 'baseball_mlb' }
 ];
 
-const SUPPLEMENTAL_MLB_H2H_BOOKS = [
-  // Verified via /api/parlay-sources?auditMlbShapes=1 on 2026-06-23:
-  // individual bookmaker queries return the active MLB slate that the all-books
-  // request currently misses.
-  'fanduel',
-  'betmgm',
-  'caesars',
-  'bovada',
-  'pinnacle'
+const SUPPLEMENTAL_MLB_BOOK_CALLS = [
+  // Verified via /api/parlay-sources?auditProductionIssues=1 on 2026-06-23.
+  // Individual bookmaker calls return active MLB rows that the all-books call
+  // currently misses. Use all main-line markets only when the book returns them.
+  { bookmaker: 'fanduel', markets: 'h2h,spreads,totals' },
+  { bookmaker: 'betmgm', markets: 'h2h,spreads,totals' },
+  { bookmaker: 'caesars', markets: 'h2h,spreads,totals' },
+  { bookmaker: 'bovada', markets: 'h2h,spreads,totals' },
+  { bookmaker: 'pinnacle', markets: 'h2h' },
+  { bookmaker: 'fanatics', markets: 'h2h,spreads,totals' },
+  { bookmaker: 'betrivers', markets: 'h2h,spreads,totals' }
 ];
 
 function getLookaheadDays(req) {
@@ -154,6 +172,125 @@ function pushUniqueMarkets(target, candidates, seenKeys) {
     added += 1;
   }
   return added;
+}
+
+function eventDateForMatch(startTime) {
+  const ms = new Date(startTime || '').getTime();
+  if (!Number.isFinite(ms)) return '';
+  return new Date(ms - 4 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function comparisonGameKey(m) {
+  return [
+    m.sport,
+    m.away,
+    m.home,
+    eventDateForMatch(m.startTime)
+  ].map(value => String(value || '').toLowerCase()).join('|');
+}
+
+function comparisonMarketKey(m) {
+  return [
+    comparisonGameKey(m),
+    m.marketType,
+    m.marketType === 'spread' ? String(m.favoredTeamName || '').toLowerCase() : '',
+    m.line == null ? '' : String(m.line)
+  ].join('|');
+}
+
+function bestPairPricing(mA, mB) {
+  const combos = [
+    { sideA: 'YES', sideB: 'NO', priceA: mA.yesPrice, priceB: mB.noPrice },
+    { sideA: 'NO', sideB: 'YES', priceA: mA.noPrice, priceB: mB.yesPrice }
+  ].filter(c => c.priceA && c.priceB);
+  if (!combos.length) return null;
+  combos.sort((a, b) => (a.priceA + a.priceB) - (b.priceA + b.priceB));
+  const best = combos[0];
+  const impliedSum = best.priceA + best.priceB;
+  return {
+    ...best,
+    impliedSum,
+    holdPercent: (impliedSum - 1) * 100,
+    marginPercent: (1 - impliedSum) * 100,
+    isArb: impliedSum < 1,
+    isNear: impliedSum >= 1 && impliedSum < 1.02
+  };
+}
+
+function sportsbookDiagnostics(markets) {
+  const sportsbook = (markets || []).filter(m => SPORTSBOOK_BOOK_SET.has(m.platform));
+  const bySport = {};
+  const byBook = {};
+  const normalizedByMarketType = {};
+  for (const market of sportsbook) {
+    bySport[market.sport] = (bySport[market.sport] || 0) + 1;
+    byBook[market.platform] = (byBook[market.platform] || 0) + 1;
+    normalizedByMarketType[market.marketType] = (normalizedByMarketType[market.marketType] || 0) + 1;
+  }
+
+  const groups = new Map();
+  for (const market of sportsbook) {
+    const key = comparisonMarketKey(market);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(market);
+  }
+
+  const matchedPairsByMarketType = { moneyline: 0, spread: 0, total: 0 };
+  const bestByMarketType = {};
+  const comparisons = [];
+  for (const group of groups.values()) {
+    for (let i = 0; i < group.length; i++) {
+      for (let j = i + 1; j < group.length; j++) {
+        const mA = group[i];
+        const mB = group[j];
+        if (mA.platform === mB.platform) continue;
+        const pricing = bestPairPricing(mA, mB);
+        if (!pricing) continue;
+        matchedPairsByMarketType[mA.marketType] = (matchedPairsByMarketType[mA.marketType] || 0) + 1;
+        const row = {
+          sport: mA.sport,
+          game: `${mA.away} @ ${mA.home}`,
+          startTime: mA.startTime,
+          marketType: mA.marketType,
+          line: mA.line ?? null,
+          sideTeam: mA.favoredTeamName || null,
+          bookA: mA.platform,
+          bookB: mB.platform,
+          sideA: pricing.sideA,
+          sideB: pricing.sideB,
+          priceA: pricing.priceA,
+          priceB: pricing.priceB,
+          holdPercent: pricing.holdPercent,
+          marginPercent: pricing.marginPercent,
+          isArb: pricing.isArb,
+          isNear: pricing.isNear
+        };
+        comparisons.push(row);
+        const current = bestByMarketType[mA.marketType];
+        if (!current || row.marginPercent > current.marginPercent) bestByMarketType[mA.marketType] = row;
+      }
+    }
+  }
+
+  comparisons.sort((a, b) => b.marginPercent - a.marginPercent);
+  const liveArbCount = comparisons.filter(row => row.isArb).length;
+  const nearArbCount = comparisons.filter(row => row.isNear).length;
+
+  return {
+    rawMarketsBySport: bySport,
+    rawMarketsByBook: byBook,
+    normalizedMarketsBySport: bySport,
+    normalizedMarketsByBook: byBook,
+    normalizedMarketsByMarketType,
+    matchedPairsByMarketType,
+    matchedPairCount: comparisons.length,
+    liveArbCount,
+    nearArbCount,
+    renderedCardCountEstimate: liveArbCount + nearArbCount,
+    bestByMarketType,
+    closestArbPair: comparisons[0] || null,
+    best20Comparisons: comparisons.slice(0, 20)
+  };
 }
 
 function noteSkip(debug, reason) {
@@ -416,15 +553,18 @@ async function fetchJson(path, params = {}) {
     if (value != null && value !== '') url.searchParams.set(key, value);
   });
 
+  const startedAt = Date.now();
   const response = await fetch(url.toString(), {
     headers: {
       Accept: 'application/json',
       'X-API-Key': API_KEY
-    }
+    },
+    signal: AbortSignal.timeout(CALL_TIMEOUT_MS)
   });
+  const elapsedMs = Date.now() - startedAt;
   const text = await response.text();
   const json = response.ok ? JSON.parse(text) : null;
-  return { response, text, json };
+  return { response, text, json, elapsedMs };
 }
 
 function listFromPayload(payload) {
@@ -451,6 +591,7 @@ module.exports = async function handler(req, res) {
   }
 
   try {
+    const startedAt = Date.now();
     const markets = [];
     const debug = [];
     const booksSeen = {};
@@ -463,33 +604,132 @@ module.exports = async function handler(req, res) {
     const timeWindow = buildTimeWindow(req);
     const seenMarketKeys = new Set();
 
+    const plannedCalls = [];
     for (const sport of SPORTS) {
-      const oddsResult = await fetchJson(`/sports/${sport}/odds`, {
-        regions: 'us',
-        markets: 'h2h,spreads,totals',
-        oddsFormat: 'american',
-        commenceTimeFrom: timeWindow.commenceTimeFrom,
-        commenceTimeTo: timeWindow.commenceTimeTo
+      plannedCalls.push({
+        kind: 'odds',
+        sport,
+        endpoint: `/sports/${sport}/odds`,
+        params: {
+          regions: 'us',
+          markets: 'h2h,spreads,totals',
+          oddsFormat: 'american',
+          commenceTimeFrom: timeWindow.commenceTimeFrom,
+          commenceTimeTo: timeWindow.commenceTimeTo
+        }
       });
+    }
+    for (const call of SUPPLEMENTAL_MLB_BOOK_CALLS) {
+      plannedCalls.push({
+        kind: 'mlb_supplement',
+        sport: 'baseball_mlb',
+        endpoint: '/sports/baseball_mlb/odds',
+        bookmaker: call.bookmaker,
+        markets: call.markets,
+        params: {
+          bookmakers: call.bookmaker,
+          markets: call.markets,
+          oddsFormat: 'american',
+          commenceTimeFrom: timeWindow.commenceTimeFrom,
+          commenceTimeTo: timeWindow.commenceTimeTo
+        }
+      });
+    }
+    for (const call of SUPPORTED_EXCHANGE_CALLS) {
+      plannedCalls.push({
+        kind: 'exchange',
+        sport: call.sport,
+        endpoint: `/exchange/${call.sport}/markets`,
+        exchange: call.exchange,
+        params: { exchange: call.exchange }
+      });
+    }
 
-      const r = oddsResult.response;
-      const text = oddsResult.text;
+    const settledCalls = await Promise.allSettled(plannedCalls.map(async call => {
+      try {
+        return { call, result: await fetchJson(call.endpoint, call.params) };
+      } catch (error) {
+        return { call, error };
+      }
+    }));
 
-      if (!r.ok) {
+    for (const settled of settledCalls) {
+      if (settled.status === 'rejected') {
         debug.push({
-          sport,
-          endpoint: `/sports/${sport}/odds`,
           ok: false,
-          status: r.status,
-          body: text.slice(0, 800),
-          creditHeaders: creditHeaders(r.headers)
+          error: settled.reason?.message || String(settled.reason),
+          failedBeforeResponse: true
         });
         continue;
       }
 
-      const json = oddsResult.json;
+      const { call, result } = settled.value;
+      if (settled.value.error) {
+        debug.push({
+          sport: call.sport,
+          endpoint: call.endpoint,
+          bookmaker: call.bookmaker,
+          exchange: call.exchange,
+          supplement: call.kind === 'mlb_supplement' ? 'mlb_individual_bookmaker_main_lines' : undefined,
+          requestedMarkets: call.markets,
+          ok: false,
+          failedBeforeResponse: true,
+          error: settled.value.error?.message || String(settled.value.error)
+        });
+        continue;
+      }
+      const r = result.response;
+      const text = result.text;
+      const baseDebug = {
+        sport: call.sport,
+        endpoint: call.endpoint,
+        bookmaker: call.bookmaker,
+        exchange: call.exchange,
+        supplement: call.kind === 'mlb_supplement' ? 'mlb_individual_bookmaker_main_lines' : undefined,
+        requestedMarkets: call.markets,
+        responseMs: result.elapsedMs,
+        creditHeaders: creditHeaders(r.headers)
+      };
+
+      if (!r.ok) {
+        debug.push({
+          ...baseDebug,
+          ok: false,
+          status: r.status,
+          body: text.slice(0, 800)
+        });
+        continue;
+      }
+
+      if (call.kind === 'exchange') {
+        const allExchangeRows = listFromPayload(result.json);
+        const exchangeRows = allExchangeRows.filter(row => inTimeWindow(row.commence_time, timeWindow));
+        const normalizedExchange = exchangeRows
+          .map(m => normalizeExchangeMarket(call.exchange, m, call.sport, { skipped }))
+          .filter(Boolean);
+
+        normalizedExchange.forEach(m => {
+          booksSeen[m.platform] = m.bookTitle || EXCHANGE_TITLES[m.platform] || m.platform;
+          exchangesSeen[m.platform] = booksSeen[m.platform];
+        });
+        const added = pushUniqueMarkets(markets, normalizedExchange, seenMarketKeys);
+
+        debug.push({
+          ...baseDebug,
+          ok: true,
+          markets: exchangeRows.length,
+          rawMarkets: allExchangeRows.length,
+          normalized: normalizedExchange.length,
+          added
+        });
+        continue;
+      }
+
+      const json = result.json;
       const allEvents = Array.isArray(json) ? json : (json.data || json.events || []);
       const events = allEvents.filter(ev => inTimeWindow(ev.commence_time, timeWindow));
+      let normalizedCount = 0;
+      let addedCount = 0;
 
       for (const ev of events) {
         for (const b of ev.bookmakers || []) {
@@ -498,149 +738,28 @@ module.exports = async function handler(req, res) {
           rawBooksSeen[key] = b.title || b.key;
           if (REMOVED_BOOK_SET.has(key)) excludedBooksSeen[key] = b.title || b.key;
         }
-        const normalized = normalizeEvent(ev, sport, { skipped });
+        const normalized = normalizeEvent(ev, call.sport, { skipped });
+        normalizedCount += normalized.length;
         normalized.forEach(m => {
           booksSeen[m.platform] = m.bookTitle || m.platform;
-          countsByBook[m.platform] = (countsByBook[m.platform] || 0) + 1;
-          countsBySport[m.sport] = (countsBySport[m.sport] || 0) + 1;
         });
-        pushUniqueMarkets(markets, normalized, seenMarketKeys);
+        addedCount += pushUniqueMarkets(markets, normalized, seenMarketKeys);
       }
 
       debug.push({
-        sport,
-        endpoint: `/sports/${sport}/odds`,
+        ...baseDebug,
         ok: true,
         events: events.length,
         rawEvents: allEvents.length,
+        normalized: normalizedCount,
+        added: addedCount,
         stageCounts: {
           upstreamRaw: summarizeEvents(allEvents),
           afterDateFilter: summarizeEvents(events),
           afterRemovedBookFilter: summarizeEvents(events, key => !REMOVED_BOOK_SET.has(key)),
           afterAllowedBookFilter: summarizeEvents(events, key => !REMOVED_BOOK_SET.has(key) && FINAL_BOOK_SET.has(key))
-        },
-        creditHeaders: creditHeaders(r.headers)
+        }
       });
-
-      if (sport === 'baseball_mlb') {
-        for (const bookmaker of SUPPLEMENTAL_MLB_H2H_BOOKS) {
-          const supplementResult = await fetchJson(`/sports/${sport}/odds`, {
-            bookmakers: bookmaker,
-            markets: 'h2h',
-            oddsFormat: 'american',
-            commenceTimeFrom: timeWindow.commenceTimeFrom,
-            commenceTimeTo: timeWindow.commenceTimeTo
-          });
-
-          const sr = supplementResult.response;
-          const sText = supplementResult.text;
-
-          if (!sr.ok) {
-            debug.push({
-              sport,
-              endpoint: `/sports/${sport}/odds`,
-              bookmaker,
-              supplement: 'mlb_h2h_individual_bookmaker',
-              ok: false,
-              status: sr.status,
-              body: sText.slice(0, 800),
-              creditHeaders: creditHeaders(sr.headers)
-            });
-            continue;
-          }
-
-          const supplementJson = supplementResult.json;
-          const supplementAllEvents = Array.isArray(supplementJson)
-            ? supplementJson
-            : (supplementJson.data || supplementJson.events || []);
-          const supplementEvents = supplementAllEvents.filter(ev => inTimeWindow(ev.commence_time, timeWindow));
-          let normalizedCount = 0;
-          let addedCount = 0;
-
-          for (const ev of supplementEvents) {
-            for (const b of ev.bookmakers || []) {
-              const key = normalizeBookKey(b.key);
-              if (!key) continue;
-              rawBooksSeen[key] = b.title || b.key;
-            }
-            const normalized = normalizeEvent(ev, sport, { skipped });
-            normalizedCount += normalized.length;
-            normalized.forEach(m => {
-              booksSeen[m.platform] = m.bookTitle || m.platform;
-              countsByBook[m.platform] = (countsByBook[m.platform] || 0) + 1;
-              countsBySport[m.sport] = (countsBySport[m.sport] || 0) + 1;
-            });
-            addedCount += pushUniqueMarkets(markets, normalized, seenMarketKeys);
-          }
-
-          debug.push({
-            sport,
-            endpoint: `/sports/${sport}/odds`,
-            bookmaker,
-            supplement: 'mlb_h2h_individual_bookmaker',
-            ok: true,
-            events: supplementEvents.length,
-            rawEvents: supplementAllEvents.length,
-            normalized: normalizedCount,
-            added: addedCount,
-            stageCounts: {
-              upstreamRaw: summarizeEvents(supplementAllEvents),
-              afterDateFilter: summarizeEvents(supplementEvents),
-              afterRemovedBookFilter: summarizeEvents(supplementEvents, key => !REMOVED_BOOK_SET.has(key)),
-              afterAllowedBookFilter: summarizeEvents(supplementEvents, key => !REMOVED_BOOK_SET.has(key) && FINAL_BOOK_SET.has(key))
-            },
-            creditHeaders: creditHeaders(sr.headers)
-          });
-        }
-      }
-
-      const exchangeCalls = SUPPORTED_EXCHANGE_CALLS.filter(call => call.sport === sport);
-
-      for (const { exchange: exchangeKey } of exchangeCalls) {
-        const exchangeResult = await fetchJson(`/exchange/${sport}/markets`, {
-          exchange: exchangeKey
-        });
-        const xr = exchangeResult.response;
-        const xText = exchangeResult.text;
-
-        if (!xr.ok) {
-          debug.push({
-            sport,
-            endpoint: `/exchange/${sport}/markets`,
-            exchange: exchangeKey,
-            ok: false,
-            status: xr.status,
-            body: xText.slice(0, 800),
-            creditHeaders: creditHeaders(xr.headers)
-          });
-          continue;
-        }
-
-        const allExchangeRows = listFromPayload(exchangeResult.json);
-        const exchangeRows = allExchangeRows.filter(row => inTimeWindow(row.commence_time, timeWindow));
-        const normalizedExchange = exchangeRows
-          .map(m => normalizeExchangeMarket(exchangeKey, m, sport, { skipped }))
-          .filter(Boolean);
-
-        normalizedExchange.forEach(m => {
-          booksSeen[m.platform] = m.bookTitle || EXCHANGE_TITLES[m.platform] || m.platform;
-          exchangesSeen[m.platform] = booksSeen[m.platform];
-          countsByBook[m.platform] = (countsByBook[m.platform] || 0) + 1;
-          countsBySport[m.sport] = (countsBySport[m.sport] || 0) + 1;
-        });
-        pushUniqueMarkets(markets, normalizedExchange, seenMarketKeys);
-
-        debug.push({
-          sport,
-          endpoint: `/exchange/${sport}/markets`,
-          exchange: exchangeKey,
-          ok: true,
-          markets: exchangeRows.length,
-          rawMarkets: allExchangeRows.length,
-          normalized: normalizedExchange.length,
-          creditHeaders: creditHeaders(xr.headers)
-        });
-      }
     }
 
     Object.keys(countsByBook).forEach(key => delete countsByBook[key]);
@@ -649,6 +768,11 @@ module.exports = async function handler(req, res) {
       countsByBook[market.platform] = (countsByBook[market.platform] || 0) + 1;
       countsBySport[market.sport] = (countsBySport[market.sport] || 0) + 1;
     }
+    const diagnostics = sportsbookDiagnostics(markets);
+    const creditSum = debug.reduce((sum, row) => {
+      const value = Number(row.creditHeaders?.['x-requests-last']);
+      return sum + (Number.isFinite(value) ? value : 0);
+    }, 0);
 
     return res.status(200).json({
       markets,
@@ -669,6 +793,9 @@ module.exports = async function handler(req, res) {
       exchangesSeen,
       countsByBook,
       countsBySport,
+      sportsbookDiagnostics: diagnostics,
+      creditEstimate: creditSum,
+      responseMs: Date.now() - startedAt,
       skipped,
       pulledAt: new Date().toISOString(),
       debug

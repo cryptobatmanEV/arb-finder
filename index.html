@@ -1433,6 +1433,9 @@ async function fetchParlay({ forceFresh = false } = {}) {
       samples: {},
       byBook: {},
       bySport: {},
+      backendDiagnostics: meta.backendDiagnostics || null,
+      backendCreditEstimate: meta.backendCreditEstimate || null,
+      backendResponseMs: meta.backendResponseMs || null,
       matchedPairs: 0,
       arbOrNearPairs: 0
     };
@@ -1459,7 +1462,12 @@ async function fetchParlay({ forceFresh = false } = {}) {
   const raw = data.markets || (Array.isArray(data) ? data : []);
   localStorage.setItem('parlayMarketsCache', JSON.stringify(raw));
   localStorage.setItem('parlayMarketsCacheAt', String(Date.now()));
-  return normalizeRaw(raw, { booksSeen: data.booksSeen || null });
+  return normalizeRaw(raw, {
+    booksSeen: data.booksSeen || null,
+    backendDiagnostics: data.sportsbookDiagnostics || null,
+    backendCreditEstimate: data.creditEstimate || null,
+    backendResponseMs: data.responseMs || null
+  });
 }
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -1910,6 +1918,9 @@ function App() {
     setStatus(prev => ({ ...prev, parlay:'loading' }));
     try {
       const d = await fetchParlay({ forceFresh: true });
+      if (d.length === 0 && (parlayRef.current || []).length > 0) {
+        throw new Error('Sportsbook refresh returned zero markets; keeping previous successful load');
+      }
       parlayRef.current = d;
       const next = { ...baseMarkets, parlay: d };
       setMarkets(next);
@@ -2077,6 +2088,12 @@ function App() {
           Top matched pairs: {(parlayDebug.topMatchedPairsByPlatform || []).map(([k,v]) => `${k}: ${v}`).join(' | ') || 'none'}
           <br />
           Cards shown by pair: {shownPairCounts.map(([k,v]) => `${k}: ${v}`).join(' | ') || 'none'}
+          {parlayDebug.backendDiagnostics && (
+            <>
+              <br />
+              Backend best sportsbook margins: ML {fmtPct(parlayDebug.backendDiagnostics.bestByMarketType?.moneyline?.marginPercent ?? 0)} · spread {fmtPct(parlayDebug.backendDiagnostics.bestByMarketType?.spread?.marginPercent ?? 0)} · total {fmtPct(parlayDebug.backendDiagnostics.bestByMarketType?.total?.marginPercent ?? 0)} · backend {parlayDebug.backendResponseMs || 'n/a'}ms · credits {parlayDebug.backendCreditEstimate || 'n/a'}
+            </>
+          )}
         </div>
       )}
 
