@@ -10,6 +10,11 @@ const SPORTS = [
   'icehockey_nhl'
 ];
 
+const EXCHANGE_TITLES = {
+  novig: 'Novig',
+  prophetx: 'ProphetX'
+};
+
 function implied(price) {
   const n = Number(price);
   if (!Number.isFinite(n)) return null;
@@ -167,7 +172,7 @@ function normalizeEvent(ev, sport, debug) {
   return out;
 }
 
-function normalizeProphetXMarket(m, sport, debug) {
+function normalizeExchangeMarket(exchangeKey, m, sport, debug) {
   const home = m.home_team;
   const away = m.away_team;
   const startTime = m.commence_time;
@@ -175,29 +180,32 @@ function normalizeProphetXMarket(m, sport, debug) {
   const overPrice = implied(m.over_price);
   const underPrice = implied(m.under_price);
   const marketType = String(m.market_type || '').toLowerCase();
+  const platform = normalizeBookKey(exchangeKey || m.exchange);
+  const bookTitle = EXCHANGE_TITLES[platform] || platform;
 
-  if (!home || !away || !startTime) {
-    noteSkip(debug, 'prophetx_missing_event_fields');
+  if (!platform || !home || !away || !startTime) {
+    noteSkip(debug, 'exchange_missing_event_fields');
     return null;
   }
 
   // Verified from /v1/exchange/{sport_key}/markets?exchange=prophetx:
   // market_type "Runs" has game teams, a strike, and over/under American odds.
+  // Apply this same safe shape to any exchange row that exposes the same fields.
   if (marketType !== 'runs') {
-    noteSkip(debug, 'prophetx_unsupported_market_type');
+    noteSkip(debug, 'exchange_unsupported_market_type');
     return null;
   }
 
   if (line == null || !overPrice || !underPrice) {
-    noteSkip(debug, 'prophetx_missing_prices_or_line');
+    noteSkip(debug, 'exchange_missing_prices_or_line');
     return null;
   }
 
   return {
-    id: `prophetx-${sport}-${away}-${home}-${startTime}-total-${line}`,
+    id: `${platform}-${sport}-${away}-${home}-${startTime}-total-${line}`,
     source: 'parlay',
-    platform: 'prophetx',
-    bookTitle: 'ProphetX',
+    platform,
+    bookTitle,
     sport: sportShort(sport),
     marketType: 'total',
     home,
@@ -208,8 +216,44 @@ function normalizeProphetXMarket(m, sport, debug) {
     noPrice: underPrice,
     rawTitle: `${away} vs ${home}: O/U ${line}`,
     noTitle: `${away} vs ${home}: O/U ${line}`,
-    url: googleUrl('ProphetX', away, home)
+    url: googleUrl(bookTitle, away, home)
   };
+}
+
+function creditHeaders(headers) {
+  const out = {};
+  headers.forEach((value, key) => {
+    if (/credit|request|usage|remaining|used|cost|quota|ratelimit/i.test(key)) {
+      out[key] = value;
+    }
+  });
+  return out;
+}
+
+async function fetchJson(path, params = {}) {
+  const url = new URL(`${BASE}${path}`);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value != null && value !== '') url.searchParams.set(key, value);
+  });
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      Accept: 'application/json',
+      'X-API-Key': API_KEY
+    }
+  });
+  const text = await response.text();
+  const json = response.ok ? JSON.parse(text) : null;
+  return { response, text, json };
+}
+
+function listFromPayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.exchanges)) return payload.exchanges;
+  if (Array.isArray(payload?.markets)) return payload.markets;
+  if (Array.isArray(payload?.events)) return payload.events;
+  return [];
 }
 
 module.exports = async function handler(req, res) {
@@ -227,28 +271,58 @@ module.exports = async function handler(req, res) {
     const skipped = {};
     const countsByBook = {};
     const countsBySport = {};
+    const exchangeTitles = {};
+    const exchangesSeen = {};
+    const exchangeList = await fetchJson('/exchanges');
+    let exchangeKeys = [];
+
+    if (exchangeList.response.ok) {
+      exchangeKeys = listFromPayload(exchangeList.json)
+        .map(e => {
+          const key = normalizeBookKey(e.key || e.exchange_key || e.id);
+          if (key) exchangeTitles[key] = e.title || e.name || EXCHANGE_TITLES[key] || key;
+          return key;
+        })
+        .filter(Boolean);
+      debug.push({
+        endpoint: '/exchanges',
+        ok: true,
+        exchanges: exchangeKeys,
+        creditHeaders: creditHeaders(exchangeList.response.headers)
+      });
+    } else {
+      debug.push({
+        endpoint: '/exchanges',
+        ok: false,
+        status: exchangeList.response.status,
+        body: exchangeList.text.slice(0, 800),
+        creditHeaders: creditHeaders(exchangeList.response.headers)
+      });
+    }
 
     for (const sport of SPORTS) {
-      const url = new URL(`${BASE}/sports/${sport}/odds`);
-      url.searchParams.set('regions', 'us');
-      url.searchParams.set('markets', 'h2h,spreads,totals');
-      url.searchParams.set('oddsFormat', 'american');
-
-      const r = await fetch(url.toString(), {
-        headers: {
-          Accept: 'application/json',
-          'X-API-Key': API_KEY
-        }
+      const oddsResult = await fetchJson(`/sports/${sport}/odds`, {
+        regions: 'us',
+        markets: 'h2h,spreads,totals',
+        oddsFormat: 'american'
       });
 
-      const text = await r.text();
+      const r = oddsResult.response;
+      const text = oddsResult.text;
 
       if (!r.ok) {
-        debug.push({ sport, ok: false, status: r.status, body: text.slice(0, 800) });
+        debug.push({
+          sport,
+          endpoint: `/sports/${sport}/odds`,
+          ok: false,
+          status: r.status,
+          body: text.slice(0, 800),
+          creditHeaders: creditHeaders(r.headers)
+        });
         continue;
       }
 
-      const json = JSON.parse(text);
+      const json = oddsResult.json;
       const events = Array.isArray(json) ? json : (json.data || json.events || []);
 
       for (const ev of events) {
@@ -264,51 +338,65 @@ module.exports = async function handler(req, res) {
         markets.push(...normalized);
       }
 
-      debug.push({ sport, ok: true, events: events.length });
-
-      const exchangeUrl = new URL(`${BASE}/exchange/${sport}/markets`);
-      exchangeUrl.searchParams.set('exchange', 'prophetx');
-
-      const xr = await fetch(exchangeUrl.toString(), {
-        headers: {
-          Accept: 'application/json',
-          'X-API-Key': API_KEY
-        }
-      });
-
-      const xText = await xr.text();
-
-      if (!xr.ok) {
-        debug.push({ sport, exchange: 'prophetx', ok: false, status: xr.status, body: xText.slice(0, 800) });
-        continue;
-      }
-
-      const xJson = JSON.parse(xText);
-      const exchangeRows = Array.isArray(xJson) ? xJson : (xJson.data || xJson.markets || []);
-      const normalizedExchange = exchangeRows
-        .map(m => normalizeProphetXMarket(m, sport, { skipped }))
-        .filter(Boolean);
-
-      normalizedExchange.forEach(m => {
-        booksSeen[m.platform] = m.bookTitle;
-        countsByBook[m.platform] = (countsByBook[m.platform] || 0) + 1;
-        countsBySport[m.sport] = (countsBySport[m.sport] || 0) + 1;
-      });
-      markets.push(...normalizedExchange);
-
       debug.push({
         sport,
-        exchange: 'prophetx',
+        endpoint: `/sports/${sport}/odds`,
         ok: true,
-        markets: exchangeRows.length,
-        normalized: normalizedExchange.length
+        events: events.length,
+        creditHeaders: creditHeaders(r.headers)
       });
+
+      for (const exchangeKey of exchangeKeys) {
+        const exchangeResult = await fetchJson(`/exchange/${sport}/markets`, {
+          exchange: exchangeKey
+        });
+        const xr = exchangeResult.response;
+        const xText = exchangeResult.text;
+
+        if (!xr.ok) {
+          debug.push({
+            sport,
+            endpoint: `/exchange/${sport}/markets`,
+            exchange: exchangeKey,
+            ok: false,
+            status: xr.status,
+            body: xText.slice(0, 800),
+            creditHeaders: creditHeaders(xr.headers)
+          });
+          continue;
+        }
+
+        const exchangeRows = listFromPayload(exchangeResult.json);
+        const normalizedExchange = exchangeRows
+          .map(m => normalizeExchangeMarket(exchangeKey, m, sport, { skipped }))
+          .filter(Boolean);
+
+        normalizedExchange.forEach(m => {
+          booksSeen[m.platform] = m.bookTitle || exchangeTitles[m.platform] || m.platform;
+          exchangesSeen[m.platform] = booksSeen[m.platform];
+          countsByBook[m.platform] = (countsByBook[m.platform] || 0) + 1;
+          countsBySport[m.sport] = (countsBySport[m.sport] || 0) + 1;
+        });
+        markets.push(...normalizedExchange);
+
+        debug.push({
+          sport,
+          endpoint: `/exchange/${sport}/markets`,
+          exchange: exchangeKey,
+          ok: true,
+          markets: exchangeRows.length,
+          normalized: normalizedExchange.length,
+          creditHeaders: creditHeaders(xr.headers)
+        });
+      }
     }
 
     return res.status(200).json({
       markets,
       count: markets.length,
       booksSeen,
+      exchangesAvailable: exchangeTitles,
+      exchangesSeen,
       countsByBook,
       countsBySport,
       skipped,

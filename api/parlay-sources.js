@@ -11,8 +11,6 @@ const SPORTS = [
   'icehockey_nhl'
 ];
 
-const TARGETS = ['prophetx', 'prophet x', 'rebet', 'onyx'];
-
 function interestingHeaders(headers) {
   const out = {};
   headers.forEach((value, key) => {
@@ -43,11 +41,6 @@ function keyText(row) {
     row?.title,
     row?.display_name
   ].filter(Boolean).join(' ').toLowerCase();
-}
-
-function matchesTarget(row) {
-  const text = keyText(row);
-  return TARGETS.some(t => text.includes(t));
 }
 
 function countBy(rows, field) {
@@ -113,7 +106,6 @@ async function callParlay(path, params = {}) {
   try { payload = JSON.parse(text); } catch (_) {}
 
   const rows = listFromPayload(payload);
-  const targetRows = rows.filter(matchesTarget).slice(0, 10);
 
   return {
     endpoint: path,
@@ -124,10 +116,30 @@ async function callParlay(path, params = {}) {
     rowCount: rows.length,
     countsByMarketKey: countBy(rows, 'market_key'),
     countsByMarketType: countBy(rows, 'market_type'),
-    foundTargets: targetRows.map(compactRow),
+    rows,
     sampleRows: rows.slice(0, 3).map(compactRow),
     errorText: r.ok ? undefined : text.slice(0, 800)
   };
+}
+
+function sourceKey(row) {
+  return String(row?.key || row?.exchange_key || row?.bookmaker_key || row?.id || row?.exchange || '').toLowerCase();
+}
+
+function sourceTitle(row) {
+  return row?.title || row?.name || row?.display_name || row?.exchange || sourceKey(row);
+}
+
+function sourceList(rows) {
+  return rows
+    .map(row => ({ key: sourceKey(row), title: sourceTitle(row) }))
+    .filter(row => row.key)
+    .sort((a, b) => a.key.localeCompare(b.key));
+}
+
+function setDiff(allRows, seenRows) {
+  const seen = new Set(seenRows.map(row => row.key));
+  return allRows.filter(row => !seen.has(row.key));
 }
 
 module.exports = async function handler(req, res) {
@@ -140,51 +152,86 @@ module.exports = async function handler(req, res) {
 
   try {
     const checks = [];
+    const bookmakerSeen = {};
+    const exchangeSeen = {};
 
-    checks.push(await callParlay('/bookmakers'));
+    const bookmakers = await callParlay('/bookmakers');
+    checks.push(bookmakers);
+    const bookmakersAvailable = sourceList(bookmakers.rows);
 
     for (const sport of SPORTS) {
-      checks.push(await callParlay(`/sports/${sport}/odds`, {
+      const odds = await callParlay(`/sports/${sport}/odds`, {
         regions: 'us',
         markets: 'h2h,spreads,totals',
         oddsFormat: 'american'
-      }));
-      checks.push(await callParlay(`/sports/${sport}/props`, {
+      });
+      checks.push(odds);
+      for (const ev of odds.rows) {
+        for (const book of ev.bookmakers || []) {
+          const key = sourceKey(book);
+          if (key) bookmakerSeen[key] = book.title || book.name || key;
+        }
+      }
+
+      const props = await callParlay(`/sports/${sport}/props`, {
         regions: 'us',
         oddsFormat: 'american'
-      }));
+      });
+      checks.push(props);
+      for (const ev of props.rows) {
+        for (const book of ev.bookmakers || []) {
+          const key = sourceKey(book);
+          if (key) bookmakerSeen[key] = book.title || book.name || key;
+        }
+      }
     }
 
     const exchanges = await callParlay('/exchanges');
     checks.push(exchanges);
+    const exchangesAvailable = sourceList(exchanges.rows);
 
-    const exchangeKeys = exchanges.foundTargets
-      .map(row => row.key)
-      .filter(Boolean);
+    const exchangeKeys = exchangesAvailable.map(row => row.key);
+    const exchangeMarketCounts = {};
 
     for (const exchangeKey of exchangeKeys) {
       for (const sport of SPORTS) {
-        checks.push(await callParlay(`/exchange/${sport}/markets`, {
+        const exchangeMarkets = await callParlay(`/exchange/${sport}/markets`, {
           exchange: exchangeKey
-        }));
+        });
+        checks.push(exchangeMarkets);
+        if (!exchangeMarketCounts[exchangeKey]) exchangeMarketCounts[exchangeKey] = {};
+        exchangeMarketCounts[exchangeKey][sport] = exchangeMarkets.rowCount;
+        if (exchangeMarkets.rowCount > 0) {
+          const exchangeMeta = exchangesAvailable.find(e => e.key === exchangeKey);
+          exchangeSeen[exchangeKey] = exchangeMeta?.title || exchangeKey;
+        }
       }
     }
 
-    const allFoundRows = checks.flatMap(c => c.foundTargets || []);
-    const sourceSummary = {};
-    for (const row of allFoundRows) {
-      const text = `${row.key || ''} ${row.title || ''}`.toLowerCase();
-      if (text.includes('prophet')) sourceSummary.prophetx = row.key || row.title;
-      if (text.includes('rebet')) sourceSummary.rebet = row.key || row.title;
-      if (text.includes('onyx')) sourceSummary.onyx = row.key || row.title;
-    }
+    const sports = await callParlay('/sports');
+    checks.push(sports);
+
+    const bookmakersCurrentlySeen = Object.entries(bookmakerSeen)
+      .map(([key, title]) => ({ key, title }))
+      .sort((a, b) => a.key.localeCompare(b.key));
+    const exchangesCurrentlySeen = Object.entries(exchangeSeen)
+      .map(([key, title]) => ({ key, title }))
+      .sort((a, b) => a.key.localeCompare(b.key));
+
+    const cleanChecks = checks.map(({ rows, ...check }) => check);
 
     return res.status(200).json({
       ok: true,
       pulledAt: new Date().toISOString(),
-      checkedTargets: ['ProphetX', 'Rebet', 'Onyx'],
-      sourceSummary,
-      checks
+      bookmakersAvailable,
+      exchangesAvailable,
+      sportsAvailable: sports.rows.map(compactRow),
+      bookmakersCurrentlySeen,
+      exchangesCurrentlySeen,
+      bookmakersMissing: setDiff(bookmakersAvailable, bookmakersCurrentlySeen),
+      exchangesMissing: setDiff(exchangesAvailable, exchangesCurrentlySeen),
+      exchangeMarketCounts,
+      checks: cleanChecks
     });
   } catch (err) {
     return res.status(500).json({ error: err.message });
