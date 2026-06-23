@@ -10,41 +10,10 @@ const SPORTS = [
   'icehockey_nhl'
 ];
 
-const BOOKMAKERS = [
-  'draftkings',
-  'fanduel',
-  'caesars',
-  'bovada',
-  'betmgm',
-  'fanatics',
-  'pinnacle',
-  'fliff',
-  'bet365',
-  'betrivers',
-  'hardrock',
-  'pointsbet',
-  'novig',
-  'prophetx',
-  'kalshi'
-];
-
-function impliedFromAmerican(price) {
-  const n = Number(price);
-  if (!Number.isFinite(n)) return null;
-  return n > 0 ? 100 / (n + 100) : Math.abs(n) / (Math.abs(n) + 100);
-}
-
-function impliedFromDecimal(price) {
-  const n = Number(price);
-  if (!Number.isFinite(n) || n <= 1) return null;
-  return 1 / n;
-}
-
 function implied(price) {
   const n = Number(price);
   if (!Number.isFinite(n)) return null;
-  if (n > 1 && n < 100) return impliedFromDecimal(n);
-  return impliedFromAmerican(n);
+  return n > 0 ? 100 / (n + 100) : Math.abs(n) / (Math.abs(n) + 100);
 }
 
 function sportShort(sport) {
@@ -61,7 +30,6 @@ function googleUrl(book, away, home) {
 
 function normalizeEvent(ev, sport) {
   const out = [];
-
   const home = ev.home_team;
   const away = ev.away_team;
   const startTime = ev.commence_time;
@@ -182,12 +150,12 @@ module.exports = async function handler(req, res) {
   try {
     const markets = [];
     const debug = [];
+    const booksSeen = {};
 
     for (const sport of SPORTS) {
       const url = new URL(`${BASE}/sports/${sport}/odds`);
       url.searchParams.set('regions', 'us');
       url.searchParams.set('markets', 'h2h,spreads,totals');
-      url.searchParams.set('bookmakers', BOOKMAKERS.join(','));
       url.searchParams.set('oddsFormat', 'american');
 
       const r = await fetch(url.toString(), {
@@ -200,51 +168,31 @@ module.exports = async function handler(req, res) {
       const text = await r.text();
 
       if (!r.ok) {
-        debug.push({
-          sport,
-          ok: false,
-          status: r.status,
-          body: text.slice(0, 500)
-        });
+        debug.push({ sport, ok: false, status: r.status, body: text.slice(0, 800) });
         continue;
       }
 
-      let json;
-      try {
-        json = JSON.parse(text);
-      } catch {
-        debug.push({
-          sport,
-          ok: false,
-          status: r.status,
-          body: text.slice(0, 500)
-        });
-        continue;
-      }
-
+      const json = JSON.parse(text);
       const events = Array.isArray(json) ? json : (json.data || json.events || []);
 
-      debug.push({
-        sport,
-        ok: true,
-        events: events.length
-      });
-
       for (const ev of events) {
+        for (const b of ev.bookmakers || []) {
+          booksSeen[b.key] = b.title || b.key;
+        }
         markets.push(...normalizeEvent(ev, sport));
       }
+
+      debug.push({ sport, ok: true, events: events.length });
     }
 
     return res.status(200).json({
       markets,
       count: markets.length,
-      bookmakers: BOOKMAKERS,
+      booksSeen,
       pulledAt: new Date().toISOString(),
       debug
     });
   } catch (err) {
-    return res.status(500).json({
-      error: err.message || 'ParlayAPI fetch failed'
-    });
+    return res.status(500).json({ error: err.message });
   }
 };
