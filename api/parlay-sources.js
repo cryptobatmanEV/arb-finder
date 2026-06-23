@@ -402,6 +402,14 @@ module.exports = async function handler(req, res) {
       ];
 
       const bookmakerKeysToTest = ['draftkings', 'fanduel', 'betmgm', 'caesars', 'bovada', 'pinnacle'];
+      const bookmakerCsvToTest = bookmakerKeysToTest.join(',');
+      shapeCases.push(
+        ['bookmaker CSV h2h no region', { bookmakers: bookmakerCsvToTest, markets: 'h2h', oddsFormat: 'american' }],
+        ['bookmaker CSV all markets no region', { bookmakers: bookmakerCsvToTest, markets: 'h2h,spreads,totals', oddsFormat: 'american' }],
+        ['bookmaker CSV all markets include live', { bookmakers: bookmakerCsvToTest, markets: 'h2h,spreads,totals', oddsFormat: 'american', include_live: 'true' }],
+        ['bookmaker CSV all markets date ISO milliseconds', { bookmakers: bookmakerCsvToTest, markets: 'h2h,spreads,totals', oddsFormat: 'american', commenceTimeFrom: fromIsoMs, commenceTimeTo: toIsoMs }],
+        ['bookmaker CSV all markets date ISO milliseconds include live', { bookmakers: bookmakerCsvToTest, markets: 'h2h,spreads,totals', oddsFormat: 'american', include_live: 'true', commenceTimeFrom: fromIsoMs, commenceTimeTo: toIsoMs }]
+      );
       for (const bookmaker of bookmakerKeysToTest) {
         shapeCases.push(
           [`bookmaker ${bookmaker} h2h no region`, { bookmakers: bookmaker, markets: 'h2h', oddsFormat: 'american' }],
