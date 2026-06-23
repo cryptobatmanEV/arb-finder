@@ -53,12 +53,24 @@ function matchesTarget(row) {
 function compactRow(row) {
   if (!row || typeof row !== 'object') return row;
   return {
+    id: row.id || row.event_id || row.market_id || null,
     key: row.key || row.exchange_key || row.bookmaker_key || row.id || null,
     title: row.title || row.name || row.display_name || null,
+    rawTitle: row.rawTitle || row.raw_title || row.question || row.description || null,
+    source: row.source || row.exchange || row.bookmaker || null,
     sport_key: row.sport_key || row.sport || null,
+    market_type: row.market_type || row.marketType || row.type || null,
+    line: row.line ?? row.point ?? row.strike ?? null,
+    yesPrice: row.yesPrice ?? row.yes_price ?? row.yes ?? row.best_yes_price ?? null,
+    noPrice: row.noPrice ?? row.no_price ?? row.no ?? row.best_no_price ?? null,
+    price: row.price ?? row.odds ?? null,
+    volume: row.volume ?? row.volume24h ?? row.liquidity ?? null,
     commence_time: row.commence_time || row.start_time || row.startTime || null,
     home_team: row.home_team || row.home || null,
     away_team: row.away_team || row.away || null,
+    outcomes: Array.isArray(row.outcomes)
+      ? row.outcomes.slice(0, 4)
+      : undefined,
     bookmakers: Array.isArray(row.bookmakers)
       ? row.bookmakers.slice(0, 5).map(b => ({ key: b.key, title: b.title }))
       : undefined,
