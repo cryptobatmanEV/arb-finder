@@ -334,7 +334,23 @@ module.exports = async function handler(req, res) {
 
     const expansionAudit = [];
     const propsAudit = [];
+    const eventsAudit = [];
     if (auditExpansion) {
+      for (const sport of SPORTS) {
+        const events = await callParlay(`/sports/${sport}/events`, {
+          commenceTimeFrom: timeWindow.commenceTimeFrom,
+          commenceTimeTo: timeWindow.commenceTimeTo
+        });
+        checks.push(events);
+        eventsAudit.push({
+          sport,
+          rowCount: events.rows.length,
+          creditHeaders: events.creditHeaders,
+          sampleRows: events.rows.slice(0, 2).map(compactRow),
+          supportAssessment: 'event precheck candidate; only useful if cheaper than the matching odds call'
+        });
+      }
+
       for (const candidate of EXPANSION_CANDIDATE_SPORTS) {
         const sportRow = sportsByKey.get(candidate.key);
         if (!sportRow?.active) {
@@ -429,6 +445,7 @@ module.exports = async function handler(req, res) {
       expansionAuditEnabled: auditExpansion,
       expansionAudit,
       propsAudit,
+      eventsAudit,
       checks: cleanChecks
     });
   } catch (err) {
