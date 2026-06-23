@@ -53,6 +53,7 @@ function matchesTarget(row) {
 function compactRow(row) {
   if (!row || typeof row !== 'object') return row;
   return {
+    rawKeys: Object.keys(row),
     id: row.id || row.event_id || row.market_id || null,
     key: row.key || row.exchange_key || row.bookmaker_key || row.id || null,
     title: row.title || row.name || row.display_name || null,
