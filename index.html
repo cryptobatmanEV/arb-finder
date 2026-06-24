@@ -690,7 +690,7 @@ function extractPolymarketStructure(m) {
 
   // Use endDateIso — confirmed accurate by debug (endDateIso=2026-04-25 for Apr 25 game)
   // Slug date can be off by one (created in US timezone before UTC game date)
-  const gameDate = (m.endDateIso || m.end || gameKey.match(/(\d{4}-\d{2}-\d{2})$/)?.[1] || null);
+  const gameDate = (gameKey.match(/(\d{4}-\d{2}-\d{2})$/)?.[1] || null);
 
   // Market type + line + prop fields
   let marketType = 'moneyline';
@@ -758,7 +758,10 @@ function extractPolymarketStructure(m) {
   const fallbackYes = parseFloat(fallback[0] || 0);
   const fallbackNo = parseFloat(fallback[1] || 0);
   const yesPrice = clobYesRaw > 0.01 ? clobYesRaw : bestAsk > 0.01 ? bestAsk : clobYes > 0.01 ? clobYes : fallbackYes;
-  const noPrice  = clobNoRaw  > 0.01 ? clobNoRaw  : clobNo > 0.01 ? clobNo : fallbackNo > 0.01 ? fallbackNo : bestBid > 0.01 ? (1 - bestBid) : 0;
+  const noCandidate = clobNoRaw > 0.01 ? clobNoRaw : clobNo > 0.01 ? clobNo : fallbackNo > 0.01 ? fallbackNo : bestBid > 0.01 ? (1 - bestBid) : 0;
+  const noPrice = fallbackNo > 0.01 && (!noCandidate || Math.abs(noCandidate - fallbackNo) > 0.15 || (yesPrice > 0.01 && yesPrice + noCandidate > 1.2))
+    ? fallbackNo
+    : noCandidate;
 
   if (!yesPrice || yesPrice < 0.02 || yesPrice > 0.98) return null;
   // Reject markets where $50 is not fully fillable (too illiquid to arb)
@@ -1985,6 +1988,203 @@ function attachSideBoards(primary, allMarkets) {
   };
 }
 
+function canonicalEventKey(m) {
+  const teams = Array.isArray(m?.teams) ? m.teams : [];
+  const away = teams[0] || teamNameToAbbr(m?.away || m?.sourceProof?.YES?.rawAwayTeam || m?.sourceProof?.NO?.rawAwayTeam, m?.sport) || '';
+  const home = teams[1] || teamNameToAbbr(m?.home || m?.sourceProof?.YES?.rawHomeTeam || m?.sourceProof?.NO?.rawHomeTeam, m?.sport) || '';
+  const rawTime = m?.sourceProof?.YES?.rawCommenceTime || m?.sourceProof?.NO?.rawCommenceTime || m?.startTime || null;
+  const rawDate = rawTime ? String(rawTime).slice(0, 10) : (m?.gameDate || '');
+  return [m?.sport || '', away, home, rawDate].map(v => String(v || '').toLowerCase()).join('|');
+}
+
+function displayLocalDate(rawTime, fallback = null) {
+  if (!rawTime) return fallback;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(rawTime))) return String(rawTime);
+  const date = new Date(rawTime);
+  if (!Number.isFinite(date.getTime())) return fallback;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Chicago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date).reduce((acc, part) => {
+    acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function canonicalBoardRows(markets) {
+  const rows = [];
+  (markets || []).forEach(market => {
+    if (!['moneyline', 'spread', 'total'].includes(market?.marketType)) return;
+    ['YES', 'NO'].forEach(outcome => {
+      const leg = marketSideLeg(market, outcome);
+      if (!leg || !leg.price || leg.price <= 0 || leg.price >= 1) return;
+      const proof = leg.sourceProof || {};
+      const rawTime = proof.rawCommenceTime || market.startTime || null;
+      const eventKey = canonicalEventKey(market);
+      const exactBet = displayBetLabel(leg);
+      rows.push({
+        platform: leg.platform,
+        book: PLAT_LB[leg.platform] || leg.platform,
+        eventKey,
+        gameKey: market.gameKey || null,
+        sport: market.sport,
+        title: market.teams?.length ? market.teams.map(t => (PM_ABBR[t] || t).toUpperCase()).join(' vs ') : (market.rawTitle || ''),
+        gameDate: displayLocalDate(rawTime, market.gameDate || null),
+        rawCommenceTime: rawTime,
+        marketType: market.marketType,
+        line: market.line ?? null,
+        sideKey: canonicalSideIdentity(leg),
+        exactBet,
+        outcome,
+        price: leg.price,
+        american: probToAmerican(leg.price),
+        rawTitle: leg.rawTitle,
+        sourceProof: proof,
+        sourceMarket: market,
+        rawPrice: leg.rawPrice ?? (outcome === 'YES' ? market.rawPrice : market.rawNoPrice) ?? leg.price
+      });
+    });
+  });
+  return rows;
+}
+
+function boardGroupKey(row) {
+  return [
+    row.eventKey,
+    row.marketType,
+    row.line ?? ''
+  ].map(v => String(v || '').toLowerCase()).join('|');
+}
+
+function dedupeBoardRows(rows) {
+  const best = new Map();
+  (rows || []).forEach(row => {
+    const key = [row.platform, row.sideKey, row.line ?? ''].join('|');
+    const current = best.get(key);
+    if (!current || row.price < current.price) best.set(key, row);
+  });
+  return [...best.values()].sort((a, b) => a.price - b.price || a.platform.localeCompare(b.platform));
+}
+
+function bestBoardPair(sideA, sideB) {
+  let best = null;
+  sideA.forEach(a => {
+    sideB.forEach(b => {
+      if (a.platform === b.platform) return;
+      const sum = a.price + b.price;
+      if (!best || sum < best.sum) best = { a, b, sum };
+    });
+  });
+  return best;
+}
+
+function boardRowToLeg(row, stake = 0) {
+  return {
+    platform: row.platform,
+    outcome: row.outcome,
+    price: row.price,
+    stake,
+    rawTitle: row.rawTitle,
+    rawPrice: row.rawPrice,
+    sport: row.sport,
+    gameKey: row.gameKey,
+    marketType: row.marketType,
+    line: row.line,
+    sourceProof: {
+      ...(row.sourceProof || {}),
+      displayedBook: row.book,
+      displayedMarketType: row.marketType,
+      displayedSide: row.exactBet.replace(/\s+moneyline$/i, ''),
+      displayedLine: row.line ?? null,
+      displayedOdds: row.american,
+      normalizedSide: row.exactBet.replace(/\s+moneyline$/i, ''),
+      normalizedProbability: row.price,
+      normalizedOdds: row.american,
+      normalizedLine: row.line ?? null,
+      normalizedGameKey: row.eventKey,
+      rawCommenceTime: row.rawCommenceTime,
+      displayedDate: row.gameDate
+    }
+  };
+}
+
+function boardRowsToOpportunities(boardRows) {
+  const groups = new Map();
+  boardRows.forEach(row => {
+    const key = boardGroupKey(row);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  });
+
+  const opportunities = [];
+  const skipped = {};
+  groups.forEach(rows => {
+    const bySide = new Map();
+    rows.forEach(row => {
+      if (!bySide.has(row.sideKey)) bySide.set(row.sideKey, []);
+      bySide.get(row.sideKey).push(row);
+    });
+    if (bySide.size !== 2) {
+      skipped.side_count_not_two = (skipped.side_count_not_two || 0) + 1;
+      return;
+    }
+    const [sideAKey, sideBKey] = [...bySide.keys()].sort();
+    const sideA = dedupeBoardRows(bySide.get(sideAKey));
+    const sideB = dedupeBoardRows(bySide.get(sideBKey));
+    const best = bestBoardPair(sideA, sideB);
+    if (!best) {
+      skipped.no_cross_book_pair = (skipped.no_cross_book_pair || 0) + 1;
+      return;
+    }
+    if (best.sum < 0.90 || best.sum > 1.18 || best.a.price < 0.04 || best.b.price < 0.04) return;
+    const margin = (1 - best.sum) * 100;
+    const isArb = margin > 0;
+    const isNear = !isArb && margin > -(NEAR_ARB_BAND * 100);
+    if (!isArb && !isNear) return;
+
+    const denom = best.sum;
+    const stakeA = BASE_STAKE * best.a.price / denom;
+    const stakeB = BASE_STAKE * best.b.price / denom;
+    const profit = isArb ? BASE_STAKE * (1 / denom - 1) : 0;
+    const title = best.a.title || best.b.title || 'MLB market';
+    const lineStr = best.a.line != null ? ` (${best.a.marketType === 'spread' ? 'spread ' : 'O/U '}${best.a.line})` : '';
+    const opp = {
+      id: `${boardGroupKey(best.a)}::${sideAKey}::${sideBKey}`,
+      title: title + lineStr,
+      gameDate: best.a.gameDate || best.b.gameDate,
+      sport: best.a.sport,
+      marketType: best.a.marketType,
+      legA: boardRowToLeg(best.a, stakeA),
+      legB: boardRowToLeg(best.b, stakeB),
+      matchGroupKey: boardGroupKey(best.a),
+      matchValidation: {
+        passed: true,
+        marketFamily: best.a.marketType,
+        source: 'canonical-board',
+        legA: { platform: best.a.platform, gameKey: best.a.eventKey, line: best.a.line ?? null, side: best.a.exactBet },
+        legB: { platform: best.b.platform, gameKey: best.b.eventKey, line: best.b.line ?? null, side: best.b.exactBet }
+      },
+      impliedSum: best.sum * 100,
+      margin,
+      profit,
+      roi: isArb ? (1 / denom - 1) * 100 : 0,
+      isArb,
+      isNear,
+      groupedCount: sideA.length * sideB.length,
+      sideBoards: {
+        legA: sideA.map(row => ({ ...boardRowToLeg(row), label: row.exactBet, relation: relationToMain(row.price, best.a.price, row.platform, best.a.platform) })),
+        legB: sideB.map(row => ({ ...boardRowToLeg(row), label: row.exactBet, relation: relationToMain(row.price, best.b.price, row.platform, best.b.platform) }))
+      }
+    };
+    opportunities.push(opp);
+  });
+
+  return { opportunities: opportunities.sort((a, b) => b.margin - a.margin), skipped };
+}
+
 function groupOpportunities(opps, allMarkets = []) {
   const groups = new Map();
   (opps || []).forEach(opp => {
@@ -2448,16 +2648,18 @@ function App() {
 
   const recalc = useCallback((mkts) => {
     const allStructured = [...mkts.polymarket, ...mkts.kalshi, ...mkts.novig, ...mkts.fliff, ...mkts.parlay];
+    const canonicalBoard = canonicalBoardRows(allStructured).filter(row => row.sport === 'mlb');
+    const boardResult = boardRowsToOpportunities(canonicalBoard);
+    const boardOpps = boardResult.opportunities;
     const matched = matchMarkets(allStructured);
-    setPairs(matched.length);
+    setPairs(boardOpps.length);
     const parlayMatchedPairs = matched.filter(([mA, mB]) => mA.source === 'parlay' || mB.source === 'parlay').length;
     const sportsbookSet = new Set(SPORTSBOOK_PLATFORMS);
     const sportsbookPlatformsSeen = [...new Set((mkts.parlay || []).filter(m => sportsbookSet.has(m.platform)).map(m => m.platform))].sort();
-    const sportsbookMatchedPairs = matched.filter(([mA, mB]) => sportsbookSet.has(mA.platform) || sportsbookSet.has(mB.platform)).length;
+    const sportsbookMatchedPairs = boardOpps.filter(opp => opportunityPlatforms(opp).some(platform => sportsbookSet.has(platform))).length;
 
-    const arbList = [], nearList = [];
-    let parlayArbOrNearPairs = 0;
-    let sportsbookArbOrNearPairs = 0;
+    let parlayArbOrNearPairs = boardOpps.filter(opp => opportunityPlatforms(opp).some(platform => mkts.parlay.some(m => m.platform === platform))).length;
+    let sportsbookArbOrNearPairs = sportsbookMatchedPairs;
     const matchValidationSkips = {};
     matched.forEach(([mA, mB]) => {
       const validation = validateArbMarketPair(mA, mB);
@@ -2465,18 +2667,10 @@ function App() {
         matchValidationSkips[validation.reason] = (matchValidationSkips[validation.reason] || 0) + 1;
         return;
       }
-      const opp = calcArb(mA, mB);
-      if (!opp) return;
-      if (mA.source === 'parlay' || mB.source === 'parlay') parlayArbOrNearPairs += 1;
-      if (sportsbookSet.has(mA.platform) || sportsbookSet.has(mB.platform)) sportsbookArbOrNearPairs += 1;
-      if (opp.isArb) arbList.push(opp);
-      else if (opp.isNear) nearList.push(opp);
     });
 
-    arbList.sort((a,b) => b.margin - a.margin);
-    nearList.sort((a,b) => b.margin - a.margin);
-    const rawValidatedOpps = [...arbList, ...nearList];
-    const groupedOpps = groupOpportunities(rawValidatedOpps, allStructured);
+    const rawValidatedOpps = boardOpps;
+    const groupedOpps = boardOpps;
     const groupedArbs = groupedOpps.filter(opp => opp.isArb);
     const groupedNear = groupedOpps.filter(opp => opp.isNear);
     setArbs(groupedArbs);
@@ -2501,10 +2695,13 @@ function App() {
       topMatchedPairsByPlatform: topEntries(countPairsByPlatform(matched), 20),
       topResultCardsByPlatform: topEntries(countOppsByPlatform(resultOpps), 20),
       sportsbookResultCardsTotal: resultOpps.filter(o => opportunityPlatforms(o).some(platform => sportsbookSet.has(platform))).length,
+      canonicalBoardRows: canonicalBoard.length,
+      canonicalBoardRowsByPlatform: countByPlatform(canonicalBoard),
+      boardSkippedReasons: boardResult.skipped,
       rawValidatedCardsBeforeGrouping: rawValidatedOpps.length,
       groupedCardsAfterGrouping: groupedOpps.length,
-      rawArbCardsBeforeGrouping: arbList.length,
-      rawNearCardsBeforeGrouping: nearList.length,
+      rawArbCardsBeforeGrouping: groupedArbs.length,
+      rawNearCardsBeforeGrouping: groupedNear.length,
       groupedArbCards: groupedArbs.length,
       groupedNearCards: groupedNear.length,
       matchValidationSkips,

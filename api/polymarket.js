@@ -271,6 +271,14 @@ export default async function handler(req, res) {
       }
 
       // feesEnabled from Gamma API: pre-Feb-18 markets and geopolitics are fee-free.
+      const fallbackNoBase = parseFloat(fallback[1] || 0);
+      if (fallbackNoBase > 0.01 && (
+        !noBase ||
+        Math.abs(noBase - fallbackNoBase) > 0.15 ||
+        (yesBase > 0.01 && yesBase + noBase > 1.2)
+      )) {
+        noBase = fallbackNoBase;
+      }
       const hasFee = m.feesEnabled === true;
       const clobYesBuy = yesBase > 0.01 ? (hasFee ? pmPrice(yesBase) : parseFloat(yesBase.toFixed(4))) : null;
       const clobNoBuy  = noBase  > 0.01 ? (hasFee ? pmPrice(noBase)  : parseFloat(noBase.toFixed(4)))  : null;

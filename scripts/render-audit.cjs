@@ -1,335 +1,338 @@
 const https = require('https');
 
-const URL = process.argv[2] || `https://arb-finder-sooty.vercel.app/api/parlay?fresh=1&days=5&_renderAudit=${Date.now()}`;
+const ORIGIN = process.argv[2] || 'https://arb-finder-sooty.vercel.app';
 const NEAR_ARB_BAND = 0.02;
+const APPROVED = [
+  'fanduel', 'draftkings', 'betmgm', 'caesars', 'bovada', 'bet365',
+  'fanatics', 'hardrock', 'betrivers', 'pinnacle', 'kalshi', 'novig',
+  'polymarket', 'fliff', 'prophetx', 'stake', 'sugarhouse', 'tipico'
+];
 const SPORTSBOOK = new Set([
   'draftkings', 'fanduel', 'betmgm', 'caesars', 'bovada', 'bet365',
   'fanatics', 'hardrock', 'betrivers', 'pinnacle', 'stake', 'sugarhouse', 'tipico'
 ]);
-const CORE_ONLY = new Set(['novig', 'kalshi', 'polymarket', 'prophetx']);
-const TEAM_ABBR = {
-  'arizona diamondbacks':'ari','atlanta braves':'atl','baltimore orioles':'bal','boston red sox':'bos',
-  'chicago cubs':'chc','chicago white sox':'cws','cincinnati reds':'cin','cleveland guardians':'cle',
-  'colorado rockies':'col','detroit tigers':'det','houston astros':'hou','kansas city royals':'kc',
-  'los angeles angels':'laa','los angeles dodgers':'lad','miami marlins':'mia','milwaukee brewers':'mil',
-  'minnesota twins':'min','new york mets':'nym','new york yankees':'nyy','oakland athletics':'oak',
-  'philadelphia phillies':'phi','pittsburgh pirates':'pit','san diego padres':'sd','san francisco giants':'sf',
-  'seattle mariners':'sea','st louis cardinals':'stl','st. louis cardinals':'stl','tampa bay rays':'tb',
-  'texas rangers':'tex','toronto blue jays':'tor','washington nationals':'wsh',
-  'atlanta hawks':'atl','boston celtics':'bos','brooklyn nets':'bkn','charlotte hornets':'cha',
-  'chicago bulls':'chi','cleveland cavaliers':'cle','dallas mavericks':'dal','denver nuggets':'den',
-  'detroit pistons':'det','golden state warriors':'gsw','houston rockets':'hou','indiana pacers':'ind',
-  'la clippers':'lac','los angeles clippers':'lac','los angeles lakers':'lal','memphis grizzlies':'mem',
-  'miami heat':'mia','milwaukee bucks':'mil','minnesota timberwolves':'min','new orleans pelicans':'nop',
-  'new york knicks':'nyk','oklahoma city thunder':'okc','orlando magic':'orl','philadelphia 76ers':'phi',
-  'phoenix suns':'phx','portland trail blazers':'por','sacramento kings':'sac','san antonio spurs':'sas',
-  'toronto raptors':'tor','utah jazz':'uta','washington wizards':'was'
+const MLB_ABBR = {
+  'atlanta braves': 'atl', braves: 'atl', atlanta: 'atl',
+  'san diego padres': 'sd', padres: 'sd', 'san diego': 'sd',
+  'arizona diamondbacks': 'ari', diamondbacks: 'ari', arizona: 'ari',
+  'baltimore orioles': 'bal', orioles: 'bal', baltimore: 'bal',
+  'boston red sox': 'bos', 'red sox': 'bos', boston: 'bos',
+  'chicago cubs': 'chc', cubs: 'chc',
+  'chicago white sox': 'cws', 'white sox': 'cws',
+  'cincinnati reds': 'cin', reds: 'cin', cincinnati: 'cin',
+  'cleveland guardians': 'cle', guardians: 'cle', cleveland: 'cle',
+  'colorado rockies': 'col', rockies: 'col', colorado: 'col',
+  'detroit tigers': 'det', tigers: 'det', detroit: 'det',
+  'houston astros': 'hou', astros: 'hou', houston: 'hou',
+  'kansas city royals': 'kc', royals: 'kc', 'kansas city': 'kc',
+  'los angeles angels': 'laa', angels: 'laa',
+  'los angeles dodgers': 'lad', dodgers: 'lad',
+  'miami marlins': 'mia', marlins: 'mia', miami: 'mia',
+  'milwaukee brewers': 'mil', brewers: 'mil', milwaukee: 'mil',
+  'minnesota twins': 'min', twins: 'min', minnesota: 'min',
+  'new york mets': 'nym', mets: 'nym',
+  'new york yankees': 'nyy', yankees: 'nyy',
+  'oakland athletics': 'oak', athletics: 'oak', oakland: 'oak',
+  'philadelphia phillies': 'phi', phillies: 'phi',
+  'pittsburgh pirates': 'pit', pirates: 'pit',
+  'san francisco giants': 'sf', giants: 'sf',
+  'seattle mariners': 'sea', mariners: 'sea',
+  'st louis cardinals': 'stl', 'st. louis cardinals': 'stl', cardinals: 'stl',
+  'tampa bay rays': 'tb', rays: 'tb',
+  'texas rangers': 'tex', rangers: 'tex',
+  'toronto blue jays': 'tor', 'blue jays': 'tor',
+  'washington nationals': 'wsh', nationals: 'wsh'
 };
+const KA_TO_PM = {
+  ATL: 'atl', SDP: 'sd', SD: 'sd', ARI: 'ari', BAL: 'bal', BOS: 'bos',
+  CHC: 'chc', CWS: 'cws', CIN: 'cin', CLE: 'cle', COL: 'col', DET: 'det',
+  HOU: 'hou', KCR: 'kc', KC: 'kc', LAA: 'laa', LAD: 'lad', MIA: 'mia',
+  MIL: 'mil', MIN: 'min', NYM: 'nym', NYY: 'nyy', OAK: 'oak', PHI: 'phi',
+  PIT: 'pit', SEA: 'sea', SFG: 'sf', SF: 'sf', STL: 'stl', TBR: 'tb',
+  TB: 'tb', TEX: 'tex', TOR: 'tor', WSH: 'wsh'
+};
+const PM_TO_NAME = Object.fromEntries(Object.entries(MLB_ABBR).filter(([k]) => k.includes(' ')).map(([k, v]) => [v, k]));
 
-function fetchJson(url) {
+function fetchJson(path) {
+  const url = path.startsWith('http') ? path : `${ORIGIN}${path}`;
   return new Promise((resolve, reject) => {
     https.get(url, { headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' } }, res => {
       let body = '';
       res.on('data', chunk => { body += chunk; });
       res.on('end', () => {
-        try { resolve(JSON.parse(body)); } catch (error) { reject(error); }
+        try { resolve({ status: res.statusCode, json: JSON.parse(body), url }); }
+        catch (error) { reject(new Error(`${url}: ${error.message}`)); }
       });
     }).on('error', reject);
   });
 }
 
-function teamAbbr(name) {
-  const key = String(name || '').toLowerCase().trim();
-  return TEAM_ABBR[key] || key.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-}
-
-function normalizeMarket(m) {
-  const startMs = new Date(m.startTime || '').getTime();
-  const dateStr = Number.isFinite(startMs) ? new Date(startMs - 4 * 60 * 60 * 1000).toISOString().slice(0, 10) : '';
-  const away = teamAbbr(m.away);
-  const home = teamAbbr(m.home);
-  const favoredMatch = String(m.rawTitle || '').match(/Spread:\s+(.+?)\s+\(/i);
-  return {
-    ...m,
-    gameDate: m.gameDate || dateStr,
-    gameKey: m.gameKey || `${m.sport}-${away}-${home}-${dateStr}`,
-    favoredTeam: m.favoredTeam || (favoredMatch ? teamAbbr(favoredMatch[1]) : null),
-    matchGroupKey: m.matchGroupKey || [m.sport, away, home, dateStr, m.marketType, m.line ?? ''].join('|')
-  };
-}
-
-function probToAmerican(p) {
-  if (!p || p <= 0 || p >= 1) return 'n/a';
-  return p >= 0.5 ? `-${Math.round((p / (1 - p)) * 100)}` : `+${Math.round(((1 - p) / p) * 100)}`;
-}
-
-function cleanLabel(label) {
-  return String(label || '').replace(/\s+wins\??$/i, '').replace(/\?+$/g, '').trim();
-}
-
-function displayBetLabel(leg) {
-  const proof = leg.sourceProof || {};
-  const marketType = proof.displayedMarketType || proof.normalizedMarketType || leg.marketType;
-  const line = proof.displayedLine ?? proof.normalizedLine ?? leg.line ?? null;
-  const side = proof.displayedSide || proof.normalizedSide || leg.rawTitle || '';
-  if (marketType === 'moneyline') return `${cleanLabel(side)} moneyline`;
-  if (marketType === 'total') {
-    if (/^over\b/i.test(side)) return line != null ? `Over ${line}` : side;
-    if (/^under\b/i.test(side)) return line != null ? `Under ${line}` : side;
-    return `${leg.outcome === 'YES' ? 'Over' : 'Under'}${line != null ? ` ${line}` : ''}`;
-  }
-  if (marketType === 'spread') {
-    const spread = String(side).match(/^(.+?)\s+([+-][\d.]+)$/);
-    if (spread) return `${cleanLabel(spread[1])} ${spread[2]}`;
-    const titleSpread = String(leg.rawTitle || '').match(/^Spread:\s+(.+?)\s+\(([+-]?[\d.]+)\)/i);
-    if (titleSpread) return `${cleanLabel(titleSpread[1])} ${titleSpread[2]}`;
-  }
-  return cleanLabel(side);
-}
-
-function canonicalSideIdentity(leg) {
-  const label = displayBetLabel(leg).toLowerCase().replace(/\s+/g, ' ').trim();
-  const marketType = leg.sourceProof?.normalizedMarketType || leg.marketType || '';
-  const sport = leg.sport || String(leg.sourceProof?.normalizedGameKey || '').split('-')[0] || '';
-  const line = leg.sourceProof?.normalizedLine ?? leg.line ?? '';
-  if (marketType === 'moneyline') {
-    const teamText = label.replace(/\s+moneyline$/i, '').trim();
-    return `moneyline:${teamAbbr(teamText) || teamText}`;
-  }
-  if (marketType === 'spread') {
-    const side = label.replace(/\s+[+-]?[\d.]+$/i, '').trim();
-    const sideLine = (label.match(/([+-]?[\d.]+)$/) || [null, line])[1];
-    return `spread:${teamAbbr(side) || side}:${Number(sideLine)}`;
-  }
-  if (marketType === 'total') {
-    const ou = /^over\b/i.test(label) ? 'over' : /^under\b/i.test(label) ? 'under' : label;
-    return `total:${ou}:${Number(line)}`;
-  }
-  return `${sport}:${label}`;
-}
-
-function proofMarketFamily(m) {
-  return m.sourceProof?.YES?.normalizedMarketType
-    || m.sourceProof?.NO?.normalizedMarketType
-    || m.sourceProof?.YES?.rawMarketKey
-    || m.sourceProof?.NO?.rawMarketKey
-    || m.marketType
-    || null;
-}
-
-function validatePair(a, b) {
-  if (!a.gameKey || !b.gameKey || a.gameKey !== b.gameKey) return 'different_event';
-  if (!a.marketType || !b.marketType || a.marketType !== b.marketType) return 'mixed_market_type';
-  if (!['moneyline', 'spread', 'total'].includes(a.marketType)) return 'unsupported_market_family';
-  const proofA = proofMarketFamily(a);
-  const proofB = proofMarketFamily(b);
-  if (proofA && proofA !== a.marketType && !(proofA === 'h2h' && a.marketType === 'moneyline')) return 'leg_a_raw_market_mismatch';
-  if (proofB && proofB !== b.marketType && !(proofB === 'h2h' && b.marketType === 'moneyline')) return 'leg_b_raw_market_mismatch';
-  if (a.marketType === 'moneyline' && (a.line != null || b.line != null)) return 'moneyline_has_line';
-  if (a.marketType === 'spread') {
-    if (a.line == null || b.line == null) return 'spread_missing_line';
-    if (Math.abs(Number(a.line) - Number(b.line)) > 0.001) return 'spread_line_mismatch';
-    if (a.favoredTeam && b.favoredTeam && a.favoredTeam !== b.favoredTeam) return 'spread_side_mismatch';
-  }
-  if (a.marketType === 'total') {
-    if (a.line == null || b.line == null) return 'total_missing_line';
-    if (Math.abs(Number(a.line) - Number(b.line)) > 0.001) return 'total_line_mismatch';
-  }
-  return null;
-}
-
-function sourceProof(m, outcome, price) {
-  return m.sourceProof?.[outcome] || {
-    displayedMarketType: m.marketType,
-    displayedSide: outcome === 'YES' ? (m.rawTitle || m.noTitle) : (m.noTitle || m.rawTitle),
-    displayedLine: m.line ?? null,
-    normalizedOdds: probToAmerican(price)
-  };
-}
-
-function sideLeg(m, outcome) {
-  const price = outcome === 'YES' ? m.yesPrice : m.noPrice;
-  if (!price) return null;
-  return {
-    platform: m.platform,
-    outcome,
-    price,
-    rawTitle: outcome === 'YES' ? (m.rawTitle || m.noTitle) : (m.noTitle || m.rawTitle),
-    sport: m.sport,
-    gameKey: m.gameKey,
-    marketType: m.marketType,
-    line: m.line ?? null,
-    sourceProof: sourceProof(m, outcome, price)
-  };
-}
-
-function calcPair(a, b) {
-  const skip = validatePair(a, b);
-  if (skip) return { skip };
-  const combos = [
-    { a: 'YES', b: 'NO', pa: a.yesPrice, pb: b.noPrice },
-    { a: 'NO', b: 'YES', pa: a.noPrice, pb: b.yesPrice }
-  ].filter(c => c.pa && c.pb).sort((x, y) => (x.pa + x.pb) - (y.pa + y.pb));
-  if (!combos.length) return null;
-  const best = combos[0];
-  const sum = best.pa + best.pb;
-  if (sum < 0.90 || sum > 1.18 || best.pa < 0.04 || best.pb < 0.04) return null;
-  const margin = (1 - sum) * 100;
-  const isArb = margin > 0;
-  const isNear = !isArb && margin > -(NEAR_ARB_BAND * 100);
-  if (!isArb && !isNear) return null;
-  const title = `${a.away} vs ${a.home}${a.line != null ? ` ${a.marketType === 'spread' ? 'spread' : 'O/U'} ${a.line}` : ''}`;
-  return {
-    id: `${a.id}||${b.id}`,
-    title,
-    sport: a.sport,
-    marketType: a.marketType,
-    gameDate: a.gameDate,
-    margin,
-    isArb,
-    isNear,
-    matchValidation: {
-      passed: true,
-      legA: { gameKey: a.gameKey, line: a.line ?? null },
-      legB: { gameKey: b.gameKey, line: b.line ?? null }
-    },
-    legA: sideLeg(a, best.a),
-    legB: sideLeg(b, best.b)
-  };
-}
-
-function marketMatchesOpp(m, opp) {
-  const gameKey = opp.matchValidation?.legA?.gameKey || opp.matchValidation?.legB?.gameKey;
-  const line = opp.matchValidation?.legA?.line ?? opp.matchValidation?.legB?.line ?? null;
-  if (m.gameKey !== gameKey || m.marketType !== opp.marketType || m.sport !== opp.sport) return false;
-  if (opp.marketType === 'moneyline') return m.line == null;
-  return m.line != null && line != null && Math.abs(Number(m.line) - Number(line)) <= 0.001;
-}
-
-function collectBoard(markets, opp, leg) {
-  const primarySide = canonicalSideIdentity(leg);
-  const byPlatform = {};
-  markets.filter(m => marketMatchesOpp(m, opp)).forEach(m => {
-    ['YES', 'NO'].forEach(outcome => {
-      const side = sideLeg(m, outcome);
-      if (!side || canonicalSideIdentity(side) !== primarySide) return;
-      const current = byPlatform[side.platform];
-      if (!current || side.price < current.price) byPlatform[side.platform] = side;
-    });
-  });
-  return Object.values(byPlatform)
-    .sort((a, b) => a.price - b.price)
-    .map(side => ({
-      platform: side.platform,
-      label: displayBetLabel(side),
-      price: side.price,
-      odds: probToAmerican(side.price)
-    }));
-}
-
-function groupKey(opp) {
-  const gameKey = opp.matchValidation?.legA?.gameKey || opp.matchValidation?.legB?.gameKey || '';
-  const line = opp.matchValidation?.legA?.line ?? opp.matchValidation?.legB?.line ?? '';
-  const sides = [canonicalSideIdentity(opp.legA), canonicalSideIdentity(opp.legB)].sort().join(' vs ');
-  return [gameKey, opp.sport, opp.marketType, line, sides].join('|').toLowerCase();
-}
-
-function matchAndRender(markets) {
-  const opportunities = [];
-  const skipped = {};
-  for (let i = 0; i < markets.length; i += 1) {
-    for (let j = i + 1; j < markets.length; j += 1) {
-      const a = markets[i];
-      const b = markets[j];
-      if (a.platform === b.platform) continue;
-      if (a.sport !== b.sport || a.marketType !== b.marketType || a.gameKey !== b.gameKey) continue;
-      if (a.marketType === 'spread') {
-        if (a.line == null || b.line == null || Math.abs(Number(a.line) - Number(b.line)) > 0.5) continue;
-        if (a.favoredTeam && b.favoredTeam && a.favoredTeam !== b.favoredTeam) continue;
-      }
-      if (a.marketType === 'total') {
-        if (a.line == null || b.line == null || Math.abs(Number(a.line) - Number(b.line)) > 0) continue;
-      }
-      const opp = calcPair(a, b);
-      if (opp?.skip) {
-        skipped[opp.skip] = (skipped[opp.skip] || 0) + 1;
-      } else if (opp) {
-        opportunities.push(opp);
-      }
-    }
-  }
-
-  const groups = new Map();
-  opportunities.forEach(opp => {
-    const key = groupKey(opp);
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(opp);
-  });
-  const cards = [...groups.values()].map(group => {
-    const primary = [...group].sort((a, b) => b.margin - a.margin)[0];
-    return {
-      ...primary,
-      groupedCount: group.length,
-      sideBoards: {
-        legA: collectBoard(markets, primary, primary.legA),
-        legB: collectBoard(markets, primary, primary.legB)
-      }
-    };
-  }).sort((a, b) => b.margin - a.margin);
-
-  return { opportunities, cards, skipped };
-}
-
 function countBy(rows, fn) {
   return rows.reduce((acc, row) => {
-    const key = fn(row);
+    const key = fn(row) || 'unknown';
     acc[key] = (acc[key] || 0) + 1;
     return acc;
   }, {});
 }
 
-(async () => {
-  const data = await fetchJson(URL);
-  const rawMarkets = data.markets || [];
-  const markets = rawMarkets.map(normalizeMarket);
-  const sportsbookMarkets = markets.filter(m => SPORTSBOOK.has(m.platform));
-  const { opportunities, cards, skipped } = matchAndRender(markets);
-  const renderedMainLegs = cards.flatMap(card => [card.legA, card.legB]);
-  const alsoAvailable = cards.flatMap(card => [...(card.sideBoards.legA || []), ...(card.sideBoards.legB || [])]);
-  const sportsbookInCards = renderedMainLegs.some(leg => SPORTSBOOK.has(leg.platform)) || alsoAvailable.some(row => SPORTSBOOK.has(row.platform));
-  const onlyCoreRendered = renderedMainLegs.length > 0 && renderedMainLegs.every(leg => CORE_ONLY.has(leg.platform)) && alsoAvailable.every(row => CORE_ONLY.has(row.platform));
+function abbr(name) {
+  const key = String(name || '').toLowerCase().replace(/\./g, '').replace(/\s+/g, ' ').trim();
+  return MLB_ABBR[key] || key;
+}
 
-  const report = {
-    rawParlayMarkets: rawMarkets.length,
-    sportsbookMarkets: sportsbookMarkets.length,
-    sportsbookMarketsByBook: countBy(sportsbookMarkets, m => m.platform),
-    sportsbookValidatedOpportunities: opportunities.filter(o => [o.legA, o.legB].some(leg => SPORTSBOOK.has(leg.platform))).length,
-    sportsbookGroupedCards: cards.filter(card => [card.legA, card.legB, ...(card.sideBoards.legA || []), ...(card.sideBoards.legB || [])].some(row => SPORTSBOOK.has(row.platform))).length,
-    renderedCardLegsByBook: countBy(renderedMainLegs, leg => leg.platform),
-    alsoAvailableBooksByBook: countBy(alsoAvailable, row => row.platform),
-    groupedCardCount: cards.length,
-    liveArbCount: cards.filter(card => card.isArb).length,
-    nearArbCount: cards.filter(card => card.isNear).length,
-    skippedReasons: skipped,
-    first10RenderedCards: cards.slice(0, 10).map(card => ({
-      title: card.title,
-      marketType: card.marketType,
-      margin: Number(card.margin.toFixed(2)),
-      main: [
-        `${card.legA.platform}: ${displayBetLabel(card.legA)} ${probToAmerican(card.legA.price)}`,
-        `${card.legB.platform}: ${displayBetLabel(card.legB)} ${probToAmerican(card.legB.price)}`
-      ]
-    })),
-    first10AlsoAvailable: cards.slice(0, 10).map(card => ({
-      title: card.title,
-      sideA: (card.sideBoards.legA || []).map(row => `${row.platform}: ${row.label} ${row.odds}`),
-      sideB: (card.sideBoards.legB || []).map(row => `${row.platform}: ${row.label} ${row.odds}`)
-    }))
+function americanFromProbability(p) {
+  const n = Number(p);
+  if (!Number.isFinite(n) || n <= 0 || n >= 1) return null;
+  return n >= 0.5 ? -Math.round((n / (1 - n)) * 100) : Math.round(((1 - n) / n) * 100);
+}
+
+function implied(american) {
+  const n = Number(american);
+  if (!Number.isFinite(n)) return null;
+  return n > 0 ? 100 / (n + 100) : Math.abs(n) / (Math.abs(n) + 100);
+}
+
+function slugTeamsDate(slug) {
+  const parts = String(slug || '').split('-');
+  const idx = parts.findIndex(p => /^20\d{2}$/.test(p));
+  if (idx < 3) return null;
+  return { away: parts[1], home: parts[2], date: parts.slice(idx, idx + 3).join('-') };
+}
+
+function parseKalshiTicker(ticker) {
+  const middle = String(ticker || '').split('-')[1] || '';
+  const date = middle.match(/(\d{2})([A-Z]{3})(\d{2})/);
+  if (!date) return null;
+  const months = { JAN: '01', FEB: '02', MAR: '03', APR: '04', MAY: '05', JUN: '06', JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12' };
+  const rest = middle.slice(date.index + date[0].length).replace(/^\d+/, '');
+  for (const aLen of [2, 3]) {
+    const awayCode = rest.slice(0, aLen);
+    const homeCode = rest.slice(aLen);
+    if (KA_TO_PM[awayCode] && KA_TO_PM[homeCode]) {
+      return { away: KA_TO_PM[awayCode], home: KA_TO_PM[homeCode], date: `20${date[1]}-${months[date[2]]}-${date[3]}` };
+    }
+  }
+  return null;
+}
+
+function boardRow({ platform, endpoint, rawEventId, rawCommenceTime, home, away, marketType, side, line, price, rawPrice, rawPriceType, rawMarketKey, lastUpdate, fetchTimestamp, rawTitle }) {
+  const homeAbbr = abbr(home);
+  const awayAbbr = abbr(away);
+  const eventDate = rawCommenceTime ? String(rawCommenceTime).slice(0, 10) : null;
+  const displayDate = rawCommenceTime ? (/^\d{4}-\d{2}-\d{2}(T00:00:00Z)?$/.test(String(rawCommenceTime)) ? eventDate : (() => {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Chicago',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(new Date(rawCommenceTime)).reduce((acc, part) => {
+      acc[part.type] = part.value;
+      return acc;
+    }, {});
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  })()) : null;
+  return {
+    platform,
+    sourceEndpoint: endpoint,
+    rawEventId,
+    rawCommenceTime,
+    displayedLocalDate: displayDate,
+    homeTeam: home,
+    awayTeam: away,
+    normalizedEventKey: ['mlb', awayAbbr, homeAbbr, eventDate || rawEventId || ''].join('|'),
+    marketType,
+    side,
+    line: line ?? null,
+    rawPriceField: rawPrice,
+    rawPriceType,
+    normalizedAmericanOdds: price,
+    normalizedImpliedProbability: implied(price),
+    rawMarketKey,
+    lastUpdate,
+    fetchTimestamp,
+    rawTitle
   };
+}
 
-  console.log(JSON.stringify(report, null, 2));
-  if (sportsbookMarkets.length > 0 && (!sportsbookInCards || onlyCoreRendered)) {
-    console.error('FAIL: sportsbook markets exist but rendered cards/also-available do not expose sportsbook books.');
+function parlayRows(markets, fetchTimestamp) {
+  const rows = [];
+  (markets || []).filter(m => m.sport === 'mlb' && APPROVED.includes(m.platform)).forEach(m => {
+    const base = { platform: m.platform, endpoint: m.sourceProof?.YES?.sourceEndpoint || '/api/parlay', rawEventId: m.sourceProof?.YES?.rawEventId || m.id, rawCommenceTime: m.startTime, home: m.home, away: m.away, marketType: m.marketType, line: m.line ?? null, rawMarketKey: m.sourceProof?.YES?.rawMarketKey || m.marketType, fetchTimestamp, rawTitle: m.rawTitle };
+    const label = (proof, fallbackSide) => {
+      const side = proof?.normalizedSide?.replace(/\s+wins$/i, '') || fallbackSide;
+      if (m.marketType === 'moneyline') return `${side} moneyline`;
+      return side;
+    };
+    if (m.yesPrice) rows.push(boardRow({ ...base, side: label(m.sourceProof?.YES, m.marketType === 'total' ? `Over ${m.line}` : m.away), price: americanFromProbability(m.yesPrice), rawPrice: m.sourceProof?.YES?.rawOutcomePrice ?? m.yesPrice, rawPriceType: m.sourceProof?.YES?.rawOutcomePrice != null ? 'American' : 'probability', lastUpdate: m.sourceProof?.YES?.lastUpdate }));
+    if (m.noPrice) rows.push(boardRow({ ...base, side: label(m.sourceProof?.NO, m.marketType === 'total' ? `Under ${m.line}` : m.home), price: americanFromProbability(m.noPrice), rawPrice: m.sourceProof?.NO?.rawOutcomePrice ?? m.noPrice, rawPriceType: m.sourceProof?.NO?.rawOutcomePrice != null ? 'American' : 'probability', lastUpdate: m.sourceProof?.NO?.lastUpdate }));
+  });
+  return rows;
+}
+
+function polymarketRows(markets, fetchTimestamp) {
+  const rows = [];
+  (markets || []).forEach(m => {
+    const slug = m.eventSlug || m.slug || '';
+    if (!slug.startsWith('mlb-')) return;
+    const parsed = slugTeamsDate(slug);
+    if (!parsed) return;
+    const title = m.question || m.title || '';
+    if (!/^.+?\s+vs\.?\s+.+?$/i.test(title) || /O\/U|Spread|1H|inning/i.test(title)) return;
+    const fallback = Array.isArray(m.outcomePrices) ? m.outcomePrices : JSON.parse(m.outcomePrices || '[]');
+    const yes = Number(m.clobYesRawBuy || m.bestAsk || fallback[0] || 0);
+    const fallbackNo = Number(fallback[1] || 0);
+    const noCandidate = Number(m.clobNoRawBuy || m.clobNoBuy || fallbackNo || 0);
+    const no = fallbackNo > 0 && (!noCandidate || Math.abs(noCandidate - fallbackNo) > 0.15 || (yes > 0 && yes + noCandidate > 1.2))
+      ? fallbackNo
+      : noCandidate;
+    const teams = title.match(/^(.+?)\s+vs\.?\s+(.+?)$/i);
+    const awayName = teams?.[1]?.trim() || PM_TO_NAME[parsed.away] || parsed.away;
+    const homeName = teams?.[2]?.trim() || PM_TO_NAME[parsed.home] || parsed.home;
+    if (yes > 0 && yes < 1) rows.push(boardRow({ platform: 'polymarket', endpoint: '/api/polymarket', rawEventId: m.conditionId || m.id || slug, rawCommenceTime: `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${awayName} moneyline`, line: null, price: americanFromProbability(yes), rawPrice: yes, rawPriceType: 'cents', rawMarketKey: 'moneyline', fetchTimestamp, rawTitle: title }));
+    if (no > 0 && no < 1) rows.push(boardRow({ platform: 'polymarket', endpoint: '/api/polymarket', rawEventId: m.conditionId || m.id || slug, rawCommenceTime: `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${homeName} moneyline`, line: null, price: americanFromProbability(no), rawPrice: no, rawPriceType: 'cents', rawMarketKey: 'moneyline', fetchTimestamp, rawTitle: title }));
+  });
+  return rows;
+}
+
+function kalshiRows(markets, fetchTimestamp) {
+  const rows = [];
+  (markets || []).forEach(m => {
+    if (!String(m.ticker || '').startsWith('KXMLBGAME')) return;
+    const parsed = parseKalshiTicker(m.ticker);
+    if (!parsed) return;
+    const suffix = String(m.ticker).split('-').pop();
+    const yesTeam = KA_TO_PM[suffix] || null;
+    if (!yesTeam) return;
+    const noTeam = [parsed.away, parsed.home].find(t => t !== yesTeam);
+    const yAsk = Number(m.yes_ask_dollars || 0);
+    const nAsk = Number(m.no_ask_dollars || 0);
+    const homeName = PM_TO_NAME[parsed.home] || parsed.home;
+    const awayName = PM_TO_NAME[parsed.away] || parsed.away;
+    const yesName = PM_TO_NAME[yesTeam] || yesTeam;
+    const noName = PM_TO_NAME[noTeam] || noTeam;
+    if (yAsk > 0 && yAsk < 1) rows.push(boardRow({ platform: 'kalshi', endpoint: '/api/kalshi', rawEventId: m.ticker, rawCommenceTime: `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${yesName} moneyline`, line: null, price: americanFromProbability(yAsk), rawPrice: yAsk, rawPriceType: 'cents', rawMarketKey: m.series_ticker || 'KXMLBGAME', fetchTimestamp, rawTitle: m.title }));
+    if (nAsk > 0 && nAsk < 1) rows.push(boardRow({ platform: 'kalshi', endpoint: '/api/kalshi', rawEventId: m.ticker, rawCommenceTime: `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${noName} moneyline`, line: null, price: americanFromProbability(nAsk), rawPrice: nAsk, rawPriceType: 'cents', rawMarketKey: m.series_ticker || 'KXMLBGAME', fetchTimestamp, rawTitle: m.title }));
+  });
+  return rows;
+}
+
+function sideKey(row) {
+  return String(row.side || '').toLowerCase().replace(/\s+moneyline$/i, '').replace(/\s+/g, ' ').trim();
+}
+
+function matchBoard(rows) {
+  const groups = new Map();
+  rows.forEach(row => {
+    const key = [row.normalizedEventKey, row.marketType, row.line ?? ''].join('|');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  });
+  const cards = [];
+  const duplicateKeys = [];
+  groups.forEach((items, key) => {
+    const sideGroups = new Map();
+    items.forEach(row => {
+      const sk = sideKey(row);
+      if (!sideGroups.has(sk)) sideGroups.set(sk, []);
+      sideGroups.get(sk).push(row);
+    });
+    if (sideGroups.size !== 2) return;
+    const [aKey, bKey] = [...sideGroups.keys()].sort();
+    const dedupe = (items) => {
+      const bestByBook = new Map();
+      items.forEach(row => {
+        const current = bestByBook.get(row.platform);
+        if (!current || row.normalizedImpliedProbability < current.normalizedImpliedProbability) bestByBook.set(row.platform, row);
+      });
+      return [...bestByBook.values()].sort((a, b) => a.normalizedImpliedProbability - b.normalizedImpliedProbability);
+    };
+    const aRows = dedupe(sideGroups.get(aKey));
+    const bRows = dedupe(sideGroups.get(bKey));
+    let best = null;
+    aRows.forEach(a => bRows.forEach(b => {
+      if (a.platform === b.platform) return;
+      const sum = a.normalizedImpliedProbability + b.normalizedImpliedProbability;
+      if (!best || sum < best.sum) best = { a, b, sum };
+    }));
+    if (!best) return;
+    const margin = (1 - best.sum) * 100;
+    if (margin <= -(NEAR_ARB_BAND * 100)) return;
+    if (cards.some(card => card.key === key)) duplicateKeys.push(key);
+    cards.push({ key, margin, isArb: margin > 0, sideA: aRows, sideB: bRows, main: [best.a, best.b] });
+  });
+  return { cards, duplicateKeys };
+}
+
+function priceExamples(rows, platform, limit = 3) {
+  return rows.filter(r => r.platform === platform).slice(0, limit).map(r => ({
+    rawTitle: r.rawTitle,
+    side: r.side,
+    rawCents: r.rawPriceField,
+    expectedAmerican: americanFromProbability(r.rawPriceField),
+    displayedAmerican: r.normalizedAmericanOdds,
+    impliedProbability: r.normalizedImpliedProbability
+  }));
+}
+
+(async () => {
+  const fetchTimestamp = new Date().toISOString();
+  const [parlay, polymarket, kalshi] = await Promise.all([
+    fetchJson(`/api/parlay?fresh=1&days=5&_renderAudit=${Date.now()}`),
+    fetchJson(`/api/polymarket?_renderAudit=${Date.now()}`),
+    fetchJson(`/api/kalshi?_renderAudit=${Date.now()}`)
+  ]);
+  const rows = [
+    ...parlayRows(parlay.json.markets || [], fetchTimestamp),
+    ...polymarketRows(polymarket.json.markets || [], fetchTimestamp),
+    ...kalshiRows(kalshi.json.markets || [], fetchTimestamp)
+  ];
+  const { cards, duplicateKeys } = matchBoard(rows);
+  const visibleBooks = new Set(cards.flatMap(card => [...card.sideA, ...card.sideB].map(row => row.platform)));
+  const seenBooks = new Set(rows.map(row => row.platform));
+  const disappearedSportsbooks = [...seenBooks].filter(book => SPORTSBOOK.has(book) && !visibleBooks.has(book));
+  const atlSdRows = rows.filter(row => /atl|braves/i.test(row.normalizedEventKey + row.side + row.rawTitle) && /sd|padres/i.test(row.normalizedEventKey + row.side + row.rawTitle));
+  const atlSdWrongDate = atlSdRows.filter(row => String(row.displayedLocalDate || '').startsWith('2026-07-02'));
+  const output = {
+    origin: ORIGIN,
+    canonicalBoardRows: rows.length,
+    canonicalBoardRowsByBook: countBy(rows, row => row.platform),
+    sportsbookBooksSeen: [...seenBooks].filter(book => SPORTSBOOK.has(book)).sort(),
+    booksVisibleInExpandedSections: [...visibleBooks].sort(),
+    groupedCardCount: cards.length,
+    duplicateCardCount: duplicateKeys.length,
+    liveArbCount: cards.filter(c => c.isArb).length,
+    nearArbCount: cards.filter(c => !c.isArb).length,
+    polymarketPriceChecks: priceExamples(rows, 'polymarket', 3),
+    kalshiPriceChecks: priceExamples(rows, 'kalshi', 3),
+    atlSdDateCheck: atlSdRows.map(row => ({
+      platform: row.platform,
+      rawTitle: row.rawTitle,
+      side: row.side,
+      rawCommenceTime: row.rawCommenceTime,
+      displayedLocalDate: row.displayedLocalDate,
+      normalizedEventKey: row.normalizedEventKey,
+      odds: row.normalizedAmericanOdds
+    })).slice(0, 20),
+    first5GroupedCards: cards.slice(0, 5).map(card => ({
+      key: card.key,
+      margin: Number(card.margin.toFixed(2)),
+      main: card.main.map(row => `${row.platform}: ${row.side} ${row.normalizedAmericanOdds}`),
+      sideA: card.sideA.map(row => `${row.platform}: ${row.side} ${row.normalizedAmericanOdds}`),
+      sideB: card.sideB.map(row => `${row.platform}: ${row.side} ${row.normalizedAmericanOdds}`)
+    })),
+    skippedRowsAndReasons: parlay.json.skipped || {},
+    creditEstimate: parlay.json.creditEstimate || null,
+    responseMs: parlay.json.responseMs || null,
+    failures: {
+      disappearedSportsbooks,
+      atlSdWrongDateCount: atlSdWrongDate.length,
+      duplicateCardCount: duplicateKeys.length,
+      polymarketPriceMismatchCount: priceExamples(rows, 'polymarket', 20).filter(r => r.expectedAmerican !== r.displayedAmerican).length,
+      kalshiPriceMismatchCount: priceExamples(rows, 'kalshi', 20).filter(r => r.expectedAmerican !== r.displayedAmerican).length
+    }
+  };
+  console.log(JSON.stringify(output, null, 2));
+  if (output.failures.atlSdWrongDateCount || output.failures.duplicateCardCount || output.failures.polymarketPriceMismatchCount || output.failures.kalshiPriceMismatchCount) {
     process.exit(1);
   }
 })().catch(error => {
