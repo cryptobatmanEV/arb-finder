@@ -154,6 +154,12 @@ function implied(price) {
   return n > 0 ? 100 / (n + 100) : Math.abs(n) / (Math.abs(n) + 100);
 }
 
+function invalidSportsbookHold(platform, yesPrice, noPrice) {
+  if (!SPORTSBOOK_BOOK_SET.has(platform)) return false;
+  const sum = Number(yesPrice) + Number(noPrice);
+  return !Number.isFinite(sum) || sum < 0.98 || sum > 1.25;
+}
+
 function requestPath(endpoint, params = {}) {
   const qs = new URLSearchParams();
   Object.entries(params || {}).forEach(([key, value]) => {
@@ -443,6 +449,10 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
           noteSkip(debug, 'h2h_missing_prices');
           continue;
         }
+        if (invalidSportsbookHold(platform, yesPrice, noPrice)) {
+          noteSkip(debug, `sportsbook_h2h_invalid_same_book_hold_${platform}`);
+          continue;
+        }
 
         out.push({
           id: `${ev.id}-${platform}-h2h`,
@@ -476,6 +486,10 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
 
         if (!yesPrice || !noPrice || point == null) {
           noteSkip(debug, 'total_missing_prices_or_line');
+          continue;
+        }
+        if (invalidSportsbookHold(platform, yesPrice, noPrice)) {
+          noteSkip(debug, `sportsbook_total_invalid_same_book_hold_${platform}`);
           continue;
         }
 
@@ -512,6 +526,10 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
 
         if (!awayOut || !homeOut || !Number.isFinite(awayPoint) || !Number.isFinite(homePoint) || !yesPrice || !noPrice) {
           noteSkip(debug, 'spread_missing_team_price_or_line');
+          continue;
+        }
+        if (invalidSportsbookHold(platform, yesPrice, noPrice)) {
+          noteSkip(debug, `sportsbook_spread_invalid_same_book_hold_${platform}`);
           continue;
         }
         if (Math.abs(awayPoint + homePoint) > 0.001) {
