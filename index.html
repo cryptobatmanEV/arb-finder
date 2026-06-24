@@ -1751,11 +1751,13 @@ function legSideKey(leg) {
 
 function groupedOppKey(opp) {
   const sides = [legSideKey(opp.legA), legSideKey(opp.legB)].sort().join(' vs ');
+  const gameKey = opp.matchValidation?.legA?.gameKey || opp.matchValidation?.legB?.gameKey || opp.matchGroupKey || '';
+  const line = opp.matchValidation?.legA?.line ?? opp.matchValidation?.legB?.line ?? '';
   return [
-    opp.matchGroupKey || '',
+    gameKey,
     opp.sport,
     opp.marketType,
-    opp.title,
+    line,
     opp.gameDate || '',
     sides
   ].map(v => String(v || '').toLowerCase().replace(/\s+/g, ' ').trim()).join('|');
@@ -1978,6 +1980,7 @@ function ArbCard({ opp }) {
         <ArbLeg leg={legB} stake={stakeB} onStakeChange={handleStakeB} label="LEG 2" />
       </div>
 
+      <AlsoAvailable opp={opp} />
       <MatchValidationDebug validation={opp.matchValidation} />
 
       {/* Quick stake buttons */}
@@ -2202,9 +2205,13 @@ function App() {
 
     arbList.sort((a,b) => b.margin - a.margin);
     nearList.sort((a,b) => b.margin - a.margin);
-    setArbs(arbList);
-    setNear(nearList);
-    const resultOpps = [...arbList, ...nearList];
+    const rawValidatedOpps = [...arbList, ...nearList];
+    const groupedOpps = groupOpportunities(rawValidatedOpps);
+    const groupedArbs = groupedOpps.filter(opp => opp.isArb);
+    const groupedNear = groupedOpps.filter(opp => opp.isNear);
+    setArbs(groupedArbs);
+    setNear(groupedNear);
+    const resultOpps = groupedOpps;
     const first20LegProofs = resultOpps.slice(0, 10).flatMap((opp, idx) => ([
       { cardIndex: idx + 1, leg: 'A', platform: opp.legA.platform, outcome: opp.legA.outcome, matchValidation: opp.matchValidation || null, proof: opp.legA.sourceProof || null },
       { cardIndex: idx + 1, leg: 'B', platform: opp.legB.platform, outcome: opp.legB.outcome, matchValidation: opp.matchValidation || null, proof: opp.legB.sourceProof || null }
@@ -2224,6 +2231,12 @@ function App() {
       topMatchedPairsByPlatform: topEntries(countPairsByPlatform(matched), 20),
       topResultCardsByPlatform: topEntries(countOppsByPlatform(resultOpps), 20),
       sportsbookResultCardsTotal: resultOpps.filter(o => involvesPlatformSet(o, sportsbookSet)).length,
+      rawValidatedCardsBeforeGrouping: rawValidatedOpps.length,
+      groupedCardsAfterGrouping: groupedOpps.length,
+      rawArbCardsBeforeGrouping: arbList.length,
+      rawNearCardsBeforeGrouping: nearList.length,
+      groupedArbCards: groupedArbs.length,
+      groupedNearCards: groupedNear.length,
       matchValidationSkips,
       mixedMarketMatchesSkipped: matchValidationSkips.mixed_market_type || 0
     };
