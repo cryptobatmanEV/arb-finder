@@ -66,6 +66,28 @@ const SPORTSBOOK_BOOK_SET = new Set([
   'sugarhouse',
   'tipico'
 ]);
+const AUDIT_ONLY_BOOK_KEYS = [
+  // Manual checks showed material ParlayAPI mismatches. Keep these available
+  // through audit/debug endpoints, but do not use them in live arb cards.
+  'bovada',
+  'draftkings'
+];
+const AUDIT_ONLY_BOOK_SET = new Set(AUDIT_ONLY_BOOK_KEYS);
+const TRUSTED_LIVE_BOOK_KEYS = [
+  'fanduel',
+  'betmgm',
+  'caesars',
+  'bet365',
+  'fanatics',
+  'hardrock',
+  'betrivers',
+  'pinnacle',
+  'stake',
+  'sugarhouse',
+  'tipico'
+];
+const TRUSTED_LIVE_BOOK_SET = new Set(TRUSTED_LIVE_BOOK_KEYS);
+const MAX_LAST_UPDATE_AGE_SECONDS = Number(process.env.PARLAY_MAX_LAST_UPDATE_AGE_SECONDS || 300);
 const CALL_TIMEOUT_MS = Number(process.env.PARLAY_CALL_TIMEOUT_MS || 9000);
 
 const EXCHANGE_TITLES = {
@@ -86,7 +108,6 @@ const SUPPLEMENTAL_MLB_BOOK_CALLS = [
   { bookmaker: 'fanduel', markets: 'h2h,spreads,totals' },
   { bookmaker: 'betmgm', markets: 'h2h,spreads,totals' },
   { bookmaker: 'caesars', markets: 'h2h,spreads,totals' },
-  { bookmaker: 'bovada', markets: 'h2h,spreads,totals' },
   { bookmaker: 'pinnacle', markets: 'h2h' },
   { bookmaker: 'fanatics', markets: 'h2h,spreads,totals' },
   { bookmaker: 'betrivers', markets: 'h2h,spreads,totals' }
@@ -160,6 +181,29 @@ function invalidSportsbookHold(platform, yesPrice, noPrice) {
   return !Number.isFinite(sum) || sum < 0.98 || sum > 1.25;
 }
 
+function isAuditOnlyBook(platform) {
+  return AUDIT_ONLY_BOOK_SET.has(platform);
+}
+
+function isTrustedLiveBook(platform) {
+  if (!SPORTSBOOK_BOOK_SET.has(platform)) return true;
+  return TRUSTED_LIVE_BOOK_SET.has(platform);
+}
+
+function lastUpdateAgeSeconds(book, market, fetchTimestamp) {
+  const lastUpdate = book?.last_update || market?.last_update || null;
+  const fetchMs = new Date(fetchTimestamp || '').getTime();
+  const updateMs = new Date(lastUpdate || '').getTime();
+  if (!Number.isFinite(fetchMs) || !Number.isFinite(updateMs)) return null;
+  return Math.max(0, Math.round((fetchMs - updateMs) / 1000));
+}
+
+function staleSportsbookRow(platform, book, market, meta) {
+  if (!SPORTSBOOK_BOOK_SET.has(platform)) return false;
+  const age = lastUpdateAgeSeconds(book, market, meta?.fetchTimestamp);
+  return age != null && age > MAX_LAST_UPDATE_AGE_SECONDS;
+}
+
 function requestPath(endpoint, params = {}) {
   const qs = new URLSearchParams();
   Object.entries(params || {}).forEach(([key, value]) => {
@@ -170,6 +214,8 @@ function requestPath(endpoint, params = {}) {
 }
 
 function proofBase(meta, ev, book, market) {
+  const lastUpdate = book?.last_update || market?.last_update || null;
+  const ageSeconds = lastUpdateAgeSeconds(book, market, meta?.fetchTimestamp);
   return {
     sourceEndpoint: meta?.endpoint || null,
     sourceRequest: meta?.requestPath || null,
@@ -179,7 +225,8 @@ function proofBase(meta, ev, book, market) {
     rawMarketKey: market?.key || null,
     rawCommenceTime: ev?.commence_time || null,
     displayedDate: String(ev?.commence_time || '').slice(0, 10) || null,
-    lastUpdate: book?.last_update || market?.last_update || null,
+    lastUpdate,
+    lastUpdateAgeSeconds: ageSeconds,
     fetchTimestamp: meta?.fetchTimestamp || null,
     cacheStatus: 'fresh',
     rawHomeTeam: ev?.home_team || null,
@@ -433,10 +480,23 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
       noteSkip(debug, `unsupported_book_${platform}`);
       continue;
     }
+    if (isAuditOnlyBook(platform)) {
+      noteSkip(debug, `audit_only_book_${platform}`);
+      continue;
+    }
+    if (!isTrustedLiveBook(platform)) {
+      noteSkip(debug, `untrusted_live_book_${platform}`);
+      continue;
+    }
 
     for (const market of book.markets || []) {
       const key = market.key;
       const outcomes = market.outcomes || [];
+
+      if (staleSportsbookRow(platform, book, market, meta)) {
+        noteSkip(debug, `stale_book_${platform}`);
+        continue;
+      }
 
       if (key === 'h2h') {
         const awayOut = outcomes.find(o => o.name === away);
@@ -457,9 +517,10 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
         out.push({
           id: `${ev.id}-${platform}-h2h`,
           source: 'parlay',
-          platform,
-          bookTitle,
-          sport: sportShort(sport),
+    platform,
+    bookTitle,
+    trustStatus: 'trusted_live',
+    sport: sportShort(sport),
           marketType: 'moneyline',
           home,
           away,
@@ -496,9 +557,10 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
         out.push({
           id: `${ev.id}-${platform}-total-${point}`,
           source: 'parlay',
-          platform,
-          bookTitle,
-          sport: sportShort(sport),
+    platform,
+    bookTitle,
+    trustStatus: SPORTSBOOK_BOOK_SET.has(platform) ? 'trusted_live' : 'trusted_live',
+    sport: sportShort(sport),
           marketType: 'total',
           home,
           away,
@@ -542,6 +604,7 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
           source: 'parlay',
           platform,
           bookTitle,
+          trustStatus: SPORTSBOOK_BOOK_SET.has(platform) ? 'trusted_live' : 'trusted_live',
           sport: sportShort(sport),
           marketType: 'spread',
           home,
@@ -609,8 +672,9 @@ function normalizeExchangeMarket(exchangeKey, m, sport, debug, meta = {}) {
     id: `${platform}-${sport}-${away}-${home}-${startTime}-total-${line}`,
     source: 'parlay',
     platform,
-    bookTitle,
-    sport: sportShort(sport),
+          bookTitle,
+          trustStatus: SPORTSBOOK_BOOK_SET.has(platform) ? 'trusted_live' : 'trusted_live',
+          sport: sportShort(sport),
     marketType: 'total',
     home,
     away,
@@ -719,8 +783,9 @@ function normalizePropRow(row, sport, debug, meta = {}) {
     id: `${row.event_id || row.id || `${away}-${home}-${startTime}`}-${platform}-${marketKey}-${player}-${line}`,
     source: 'parlay',
     platform,
-    bookTitle,
-    sport: sportShort(sport),
+          bookTitle,
+          trustStatus: SPORTSBOOK_BOOK_SET.has(platform) ? 'trusted_live' : 'trusted_live',
+          sport: sportShort(sport),
     marketType: 'prop',
     home,
     away,
@@ -1076,6 +1141,11 @@ module.exports = async function handler(req, res) {
       },
       supportedExchangeCalls: SUPPORTED_EXCHANGE_CALLS,
       includeProps,
+      cacheStatus: forceFresh ? 'fresh' : 'vercel-cache-eligible',
+      upstreamCallsAttempted: plannedCalls.length,
+      trustedLiveBookKeys: TRUSTED_LIVE_BOOK_KEYS,
+      auditOnlyBookKeys: AUDIT_ONLY_BOOK_KEYS,
+      maxLastUpdateAgeSeconds: MAX_LAST_UPDATE_AGE_SECONDS,
       exchangesSeen,
       countsByBook,
       countsBySport,
