@@ -110,6 +110,20 @@
     .alt-book-label { text-transform: uppercase; letter-spacing: 0.06em; color: var(--dimmer); margin-right: 2px; }
     .alt-book-chip { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 6px; padding: 4px 7px; white-space: nowrap; }
     .alt-book-chip strong { color: var(--green); font-weight: 700; }
+    .side-board-toggle { margin-top: 8px; border: 1px solid var(--border); background: rgba(255,255,255,0.03); color: var(--dim); border-radius: 6px; padding: 6px 9px; font-family: var(--mono); font-size: 0.66rem; cursor: pointer; }
+    .side-board-toggle:hover { color: var(--text); border-color: var(--border-2); }
+    .side-board-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+    .side-board-panel { border: 1px solid var(--border); border-radius: 8px; background: rgba(255,255,255,0.02); overflow: hidden; }
+    .side-board-hdr { padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 0.68rem; color: var(--text); font-weight: 700; }
+    .side-board-row { display: grid; grid-template-columns: 92px 1fr auto auto; gap: 8px; align-items: center; padding: 7px 10px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.66rem; }
+    .side-board-row:last-child { border-bottom: 0; }
+    .side-board-book { color: var(--text); font-weight: 700; }
+    .side-board-bet { color: var(--dim); min-width: 0; overflow-wrap: anywhere; }
+    .side-board-odds { color: var(--green); font-weight: 800; font-family: var(--mono); }
+    .side-board-tag { color: var(--dimmer); font-size: 0.58rem; text-transform: uppercase; letter-spacing: 0.06em; }
+    .side-board-tag.main { color: var(--yellow); }
+    .side-board-tag.better { color: var(--green); }
+    .side-board-tag.worse { color: var(--dimmer); }
     .card-date { font-size: 0.65rem; color: var(--dim); font-family: var(--mono); margin-left: 10px; font-weight: 400; }
 
     /* Calculator */
@@ -188,6 +202,9 @@
       .near-toggle { margin-left: 0; }
       .stats-bar { flex-wrap: wrap; }
       .stat { min-width: 100px; }
+      .side-board-grid { grid-template-columns: 1fr; }
+      .side-board-row { grid-template-columns: 84px 1fr auto; }
+      .side-board-tag { display: none; }
     }
   </style>
 </head>
@@ -1731,6 +1748,15 @@ function countOppsByPlatform(opps) {
   }, {});
 }
 
+function opportunityPlatforms(opp) {
+  return [...new Set([
+    opp?.legA?.platform,
+    opp?.legB?.platform,
+    ...((opp?.sideBoards?.legA || []).map(book => book.platform)),
+    ...((opp?.sideBoards?.legB || []).map(book => book.platform))
+  ].filter(Boolean))];
+}
+
 function topEntries(obj, limit = 20) {
   return Object.entries(obj || {})
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
@@ -1746,7 +1772,7 @@ function bothPlatformsInSet(opp, set) {
 }
 
 function legSideKey(leg) {
-  return humanOutcome(leg.rawTitle || '', leg.outcome).toLowerCase().replace(/\s+/g, ' ').trim();
+  return displayBetLabel(leg).toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 function groupedOppKey(opp) {
@@ -1763,22 +1789,76 @@ function groupedOppKey(opp) {
   ].map(v => String(v || '').toLowerCase().replace(/\s+/g, ' ').trim()).join('|');
 }
 
-function collectSideBooks(group, primaryLeg) {
-  const side = legSideKey(primaryLeg);
+function marketMatchesGroupedOpp(market, opp) {
+  const validation = opp.matchValidation || {};
+  const gameKey = validation.legA?.gameKey || validation.legB?.gameKey;
+  const line = validation.legA?.line ?? validation.legB?.line ?? null;
+  if (!market || !gameKey || market.gameKey !== gameKey) return false;
+  if (market.sport !== opp.sport || market.marketType !== opp.marketType) return false;
+  if (opp.marketType === 'moneyline') return market.line == null;
+  if (opp.marketType === 'spread' || opp.marketType === 'total') {
+    if (market.line == null || line == null) return false;
+    return Math.abs(Number(market.line) - Number(line)) <= 0.001;
+  }
+  return false;
+}
+
+function sidePriceFromMarket(market, outcome) {
+  return outcome === 'YES' ? market.yesPrice : market.noPrice;
+}
+
+function marketSideLeg(market, outcome) {
+  const price = sidePriceFromMarket(market, outcome);
+  if (!price) return null;
+  const proof = selectedSourceProof(market, outcome, price);
+  return {
+    platform: market.platform,
+    outcome,
+    price,
+    rawTitle: outcome === 'YES' ? (market.rawTitle || market.noTitle) : (market.noTitle || market.rawTitle),
+    sourceProof: proof,
+    marketType: market.marketType,
+    line: market.line ?? null
+  };
+}
+
+function collectSideBooksFromMarkets(markets, primaryLeg) {
+  const outcome = primaryLeg.outcome;
   const byPlatform = {};
-  group.forEach(opp => {
-    [opp.legA, opp.legB].forEach(leg => {
-      if (legSideKey(leg) !== side) return;
-      const current = byPlatform[leg.platform];
-      if (!current || leg.price < current.price) {
-        byPlatform[leg.platform] = { platform: leg.platform, price: leg.price };
-      }
-    });
+  (markets || []).forEach(market => {
+    const leg = marketSideLeg(market, outcome);
+    if (!leg) return;
+    const current = byPlatform[leg.platform];
+    if (!current || leg.price < current.price) {
+      byPlatform[leg.platform] = leg;
+    }
   });
   return Object.values(byPlatform).sort((a, b) => a.price - b.price);
 }
 
-function groupOpportunities(opps) {
+function relationToMain(price, mainPrice, platform, mainPlatform) {
+  if (platform === mainPlatform) return 'main';
+  if (price < mainPrice - 0.0001) return 'better';
+  if (price > mainPrice + 0.0001) return 'worse';
+  return 'same';
+}
+
+function attachSideBoards(primary, allMarkets) {
+  const boardMarkets = (allMarkets || []).filter(market => marketMatchesGroupedOpp(market, primary));
+  const legABooks = collectSideBooksFromMarkets(boardMarkets, primary.legA);
+  const legBBooks = collectSideBooksFromMarkets(boardMarkets, primary.legB);
+  const decorate = (books, mainLeg) => books.map(book => ({
+    ...book,
+    label: displayBetLabel(book),
+    relation: relationToMain(book.price, mainLeg.price, book.platform, mainLeg.platform)
+  }));
+  return {
+    legA: decorate(legABooks, primary.legA),
+    legB: decorate(legBBooks, primary.legB)
+  };
+}
+
+function groupOpportunities(opps, allMarkets = []) {
   const groups = new Map();
   (opps || []).forEach(opp => {
     const key = groupedOppKey(opp);
@@ -1791,10 +1871,7 @@ function groupOpportunities(opps) {
       ...primary,
       id: primary.id + '::grouped',
       groupedCount: group.length,
-      alternatives: {
-        legA: collectSideBooks(group, primary.legA),
-        legB: collectSideBooks(group, primary.legB)
-      }
+      sideBoards: attachSideBoards(primary, allMarkets)
     };
   }).sort((a, b) => b.margin - a.margin);
 }
@@ -1874,16 +1951,53 @@ function MatchValidationDebug({ validation }) {
   );
 }
 
+function cleanTeamLabel(label) {
+  return String(label || '')
+    .replace(/\s+wins\??$/i, '')
+    .replace(/\s+winner\??$/i, '')
+    .replace(/\?+$/g, '')
+    .trim();
+}
+
+function displayBetLabel(leg) {
+  const proof = leg?.sourceProof || {};
+  const marketType = proof.displayedMarketType || proof.normalizedMarketType || leg?.marketType || null;
+  const line = proof.displayedLine ?? proof.normalizedLine ?? leg?.line ?? null;
+  const side = proof.displayedSide || proof.normalizedSide || humanOutcome(leg?.rawTitle, leg?.outcome);
+
+  if (marketType === 'moneyline') {
+    const team = cleanTeamLabel(side);
+    return team ? `${team} moneyline` : 'Moneyline';
+  }
+
+  if (marketType === 'spread') {
+    const spread = String(side || '').match(/^(.+?)\s+([+-][\d.]+)$/);
+    if (spread) return `${cleanTeamLabel(spread[1])} ${spread[2]}`;
+    const titleSpread = String(leg?.rawTitle || '').match(/^Spread:\s+(.+?)\s+\(([+-]?[\d.]+)\)/i);
+    if (titleSpread) return `${cleanTeamLabel(titleSpread[1])} ${titleSpread[2]}`;
+    return line != null ? `${cleanTeamLabel(side)} ${line}` : cleanTeamLabel(side);
+  }
+
+  if (marketType === 'total') {
+    if (/^over\b/i.test(side)) return line != null ? `Over ${line}` : side;
+    if (/^under\b/i.test(side)) return line != null ? `Under ${line}` : side;
+    const ou = String(leg?.rawTitle || '').match(/O\/U\s*([\d.]+)/i);
+    if (ou) return leg?.outcome === 'YES' ? `Over ${ou[1]}` : `Under ${ou[1]}`;
+    return line != null ? `${leg?.outcome === 'YES' ? 'Over' : 'Under'} ${line}` : side;
+  }
+
+  return cleanTeamLabel(side) || humanOutcome(leg?.rawTitle, leg?.outcome);
+}
+
 function AlsoAvailable({ opp }) {
-  const alt = opp.alternatives || {};
-  const legAAlternates = (alt.legA || []).filter(book => book.platform !== opp.legA.platform);
-  const legBAlternates = (alt.legB || []).filter(book => book.platform !== opp.legB.platform);
+  const [open, setOpen] = React.useState(false);
+  const boards = opp.sideBoards || {};
   const rows = [
-    { label: humanOutcome(opp.legA.rawTitle, opp.legA.outcome), books: legAAlternates },
-    { label: humanOutcome(opp.legB.rawTitle, opp.legB.outcome), books: legBAlternates }
+    { label: displayBetLabel(opp.legA), mainLeg: opp.legA, books: boards.legA || [] },
+    { label: displayBetLabel(opp.legB), mainLeg: opp.legB, books: boards.legB || [] }
   ].filter(row => row.books.length > 0);
 
-  if (!rows.length && (!opp.groupedCount || opp.groupedCount <= 1)) return null;
+  if (!rows.length) return null;
 
   return (
     <div className="alt-books">
@@ -1893,16 +2007,26 @@ function AlsoAvailable({ opp }) {
           <span>Best pair shown above from {opp.groupedCount} valid book pair{opp.groupedCount === 1 ? '' : 's'}</span>
         </div>
       )}
-      {rows.map(row => (
-        <div className="alt-book-row" key={row.label}>
-          <span className="alt-book-label">{row.label}</span>
-          {row.books.map(book => (
-            <span key={`${row.label}-${book.platform}`} className="alt-book-chip">
-              {PLAT_LB[book.platform] || book.platform} <strong>{probToAmerican(book.price)}</strong>
-            </span>
+      <button className="side-board-toggle" onClick={() => setOpen(v => !v)}>
+        {open ? 'Hide all books' : 'Show all books for this play'}
+      </button>
+      {open && (
+        <div className="side-board-grid">
+          {rows.map(row => (
+            <div className="side-board-panel" key={row.label}>
+              <div className="side-board-hdr">{row.label}</div>
+              {row.books.map(book => (
+                <div className="side-board-row" key={`${row.label}-${book.platform}`}>
+                  <span className="side-board-book">{PLAT_LB[book.platform] || book.platform}</span>
+                  <span className="side-board-bet">{book.label}</span>
+                  <span className="side-board-odds">{probToAmerican(book.price)}</span>
+                  <span className={`side-board-tag ${book.relation}`}>{book.relation}</span>
+                </div>
+              ))}
+            </div>
           ))}
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -2097,14 +2221,11 @@ function ArbLeg({ leg, stake, onStakeChange, label }) {
 
       {/* What you're actually betting on in plain English */}
       <div className="oj-what-bet">
-        <span className={`oj-outcome-badge ${leg.outcome === 'YES' ? 'yes-badge' : 'no-badge'}`}>
-          {leg.outcome}
-        </span>
-        <span className="oj-outcome-desc">{humanOutcome(leg.rawTitle, leg.outcome)}</span>
+        <span className="oj-outcome-desc">{displayBetLabel(leg)}</span>
       </div>
 
       {/* Raw market title for reference */}
-      <div className="oj-raw-title">{leg.rawTitle}</div>
+      {DEBUG_MODE && <div className="oj-raw-title">{leg.rawTitle}</div>}
 
       {/* Odds row */}
       <div className="oj-odds">
@@ -2206,7 +2327,7 @@ function App() {
     arbList.sort((a,b) => b.margin - a.margin);
     nearList.sort((a,b) => b.margin - a.margin);
     const rawValidatedOpps = [...arbList, ...nearList];
-    const groupedOpps = groupOpportunities(rawValidatedOpps);
+    const groupedOpps = groupOpportunities(rawValidatedOpps, allStructured);
     const groupedArbs = groupedOpps.filter(opp => opp.isArb);
     const groupedNear = groupedOpps.filter(opp => opp.isNear);
     setArbs(groupedArbs);
@@ -2230,7 +2351,7 @@ function App() {
       sportsbookArbOrNearPairs,
       topMatchedPairsByPlatform: topEntries(countPairsByPlatform(matched), 20),
       topResultCardsByPlatform: topEntries(countOppsByPlatform(resultOpps), 20),
-      sportsbookResultCardsTotal: resultOpps.filter(o => involvesPlatformSet(o, sportsbookSet)).length,
+      sportsbookResultCardsTotal: resultOpps.filter(o => opportunityPlatforms(o).some(platform => sportsbookSet.has(platform))).length,
       rawValidatedCardsBeforeGrouping: rawValidatedOpps.length,
       groupedCardsAfterGrouping: groupedOpps.length,
       rawArbCardsBeforeGrouping: arbList.length,
@@ -2325,14 +2446,15 @@ function App() {
     return () => clearInterval(id);
   }, [refresh]);
 
-  const visibleByBooks = (o) => enabledBooks.includes(o.legA.platform) && enabledBooks.includes(o.legB.platform);
+  const visibleByBooks = (o) => opportunityPlatforms(o).some(platform => enabledBooks.includes(platform));
   const coreSet = new Set(CORE_PLATFORMS);
   const sportsbookSet = new Set(SPORTSBOOK_PLATFORMS);
   const exchangeSet = new Set(EXCHANGE_PLATFORMS);
   const visibleBySource = (o) => {
-    if (sourceFilter === 'core') return bothPlatformsInSet(o, coreSet);
-    if (sourceFilter === 'sportsbook') return involvesPlatformSet(o, sportsbookSet);
-    if (sourceFilter === 'exchange') return involvesPlatformSet(o, exchangeSet);
+    const platforms = opportunityPlatforms(o);
+    if (sourceFilter === 'core') return platforms.some(platform => coreSet.has(platform));
+    if (sourceFilter === 'sportsbook') return platforms.some(platform => sportsbookSet.has(platform));
+    if (sourceFilter === 'exchange') return platforms.some(platform => exchangeSet.has(platform));
     return true;
   };
   const visibleByMarket = (o) => {
@@ -2346,7 +2468,7 @@ function App() {
   const displayArbs = fArbs;
   const displayNear = fNear;
   const shownOpps = [...displayArbs, ...displayNear];
-  const shownSportsbookCards = shownOpps.filter(o => involvesPlatformSet(o, sportsbookSet)).length;
+  const shownSportsbookCards = shownOpps.filter(o => opportunityPlatforms(o).some(platform => sportsbookSet.has(platform))).length;
   const shownPairCounts = topEntries(countOppsByPlatform(shownOpps), 20);
   const totalMkts = Object.values(markets).reduce((s,m) => s + m.length, 0);
   const bestM = displayArbs.length > 0 ? displayArbs[0].margin : null;
