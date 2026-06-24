@@ -109,7 +109,9 @@ function parseKalshiTicker(ticker) {
     const awayCode = rest.slice(0, aLen);
     const homeCode = rest.slice(aLen);
     if (KA_TO_PM[awayCode] && KA_TO_PM[homeCode]) {
-      return { away: KA_TO_PM[awayCode], home: KA_TO_PM[homeCode], date: `20${date[1]}-${months[date[2]]}-${date[3]}` };
+      const time = middle.match(/(\d{2})([A-Z]{3})(\d{2})(\d{4})/);
+      const startTime = time ? `20${date[1]}-${months[date[2]]}-${date[3]}T${time[4].slice(0, 2)}:${time[4].slice(2, 4)}:00Z` : null;
+      return { away: KA_TO_PM[awayCode], home: KA_TO_PM[homeCode], date: `20${date[1]}-${months[date[2]]}-${date[3]}`, startTime };
     }
   }
   return null;
@@ -154,6 +156,13 @@ function boardRow({ platform, endpoint, rawEventId, rawCommenceTime, home, away,
   };
 }
 
+function isLiveGameTime(rawTime) {
+  const startMs = new Date(rawTime || '').getTime();
+  if (!Number.isFinite(startMs)) return false;
+  const now = Date.now();
+  return now >= startMs && now <= startMs + 5 * 60 * 60 * 1000;
+}
+
 function parlayRows(markets, fetchTimestamp) {
   const rows = [];
   (markets || []).filter(m => m.sport === 'mlb' && APPROVED.includes(m.platform)).forEach(m => {
@@ -179,12 +188,9 @@ function polymarketRows(markets, fetchTimestamp) {
     const title = m.question || m.title || '';
     if (!/^.+?\s+vs\.?\s+.+?$/i.test(title) || /O\/U|Spread|1H|inning/i.test(title)) return;
     const fallback = Array.isArray(m.outcomePrices) ? m.outcomePrices : JSON.parse(m.outcomePrices || '[]');
-    const yes = Number(m.clobYesRawBuy || m.bestAsk || fallback[0] || 0);
+    const yes = Number(m.bestAsk || fallback[0] || m.clobYesRawBuy || 0);
     const fallbackNo = Number(fallback[1] || 0);
-    const noCandidate = Number(m.clobNoRawBuy || m.clobNoBuy || fallbackNo || 0);
-    const no = fallbackNo > 0 && (!noCandidate || Math.abs(noCandidate - fallbackNo) > 0.15 || (yes > 0 && yes + noCandidate > 1.2))
-      ? fallbackNo
-      : noCandidate;
+    const no = Number(fallbackNo || m.clobNoRawBuy || m.clobNoBuy || 0);
     const teams = title.match(/^(.+?)\s+vs\.?\s+(.+?)$/i);
     const awayName = teams?.[1]?.trim() || PM_TO_NAME[parsed.away] || parsed.away;
     const homeName = teams?.[2]?.trim() || PM_TO_NAME[parsed.home] || parsed.home;
@@ -210,8 +216,8 @@ function kalshiRows(markets, fetchTimestamp) {
     const awayName = PM_TO_NAME[parsed.away] || parsed.away;
     const yesName = PM_TO_NAME[yesTeam] || yesTeam;
     const noName = PM_TO_NAME[noTeam] || noTeam;
-    if (yAsk > 0 && yAsk < 1) rows.push(boardRow({ platform: 'kalshi', endpoint: '/api/kalshi', rawEventId: m.ticker, rawCommenceTime: `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${yesName} moneyline`, line: null, price: americanFromProbability(yAsk), rawPrice: yAsk, rawPriceType: 'cents', rawMarketKey: m.series_ticker || 'KXMLBGAME', fetchTimestamp, rawTitle: m.title }));
-    if (nAsk > 0 && nAsk < 1) rows.push(boardRow({ platform: 'kalshi', endpoint: '/api/kalshi', rawEventId: m.ticker, rawCommenceTime: `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${noName} moneyline`, line: null, price: americanFromProbability(nAsk), rawPrice: nAsk, rawPriceType: 'cents', rawMarketKey: m.series_ticker || 'KXMLBGAME', fetchTimestamp, rawTitle: m.title }));
+    if (yAsk > 0 && yAsk < 1) rows.push(boardRow({ platform: 'kalshi', endpoint: '/api/kalshi', rawEventId: m.ticker, rawCommenceTime: parsed.startTime || `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${yesName} moneyline`, line: null, price: americanFromProbability(yAsk), rawPrice: yAsk, rawPriceType: 'cents', rawMarketKey: m.series_ticker || 'KXMLBGAME', fetchTimestamp, rawTitle: m.title }));
+    if (nAsk > 0 && nAsk < 1) rows.push(boardRow({ platform: 'kalshi', endpoint: '/api/kalshi', rawEventId: m.ticker, rawCommenceTime: parsed.startTime || `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${noName} moneyline`, line: null, price: americanFromProbability(nAsk), rawPrice: nAsk, rawPriceType: 'cents', rawMarketKey: m.series_ticker || 'KXMLBGAME', fetchTimestamp, rawTitle: m.title }));
   });
   return rows;
 }
@@ -258,7 +264,7 @@ function matchBoard(rows) {
     const margin = (1 - best.sum) * 100;
     if (margin <= -(NEAR_ARB_BAND * 100)) return;
     if (cards.some(card => card.key === key)) duplicateKeys.push(key);
-    cards.push({ key, margin, isArb: margin > 0, sideA: aRows, sideB: bRows, main: [best.a, best.b] });
+    cards.push({ key, margin, isArb: margin > 0, isLive: items.some(row => isLiveGameTime(row.rawCommenceTime)), sideA: aRows, sideB: bRows, main: [best.a, best.b] });
   });
   return { cards, duplicateKeys };
 }
@@ -295,7 +301,9 @@ function priceExamples(rows, platform, limit = 3) {
     .map(row => row.platform));
   const disappearedSportsbooks = [...booksExpectedInRenderedMarkets].filter(book => SPORTSBOOK.has(book) && !visibleBooks.has(book));
   const atlSdRows = rows.filter(row => /atl|braves/i.test(row.normalizedEventKey + row.side + row.rawTitle) && /sd|padres/i.test(row.normalizedEventKey + row.side + row.rawTitle));
+  const nyyDetRows = rows.filter(row => /nyy|yankees/i.test(row.normalizedEventKey + row.side + row.rawTitle) && /det|tigers/i.test(row.normalizedEventKey + row.side + row.rawTitle));
   const atlSdWrongDate = atlSdRows.filter(row => String(row.displayedLocalDate || '').startsWith('2026-07-02'));
+  const nyyDetWrongDate = nyyDetRows.filter(row => String(row.displayedLocalDate || '').startsWith('2026-07-01'));
   const output = {
     origin: ORIGIN,
     canonicalBoardRows: rows.length,
@@ -306,6 +314,7 @@ function priceExamples(rows, platform, limit = 3) {
     duplicateCardCount: duplicateKeys.length,
     liveArbCount: cards.filter(c => c.isArb).length,
     nearArbCount: cards.filter(c => !c.isArb).length,
+    liveCardCount: cards.filter(c => c.isLive).length,
     polymarketPriceChecks: priceExamples(rows, 'polymarket', 3),
     kalshiPriceChecks: priceExamples(rows, 'kalshi', 3),
     atlSdDateCheck: atlSdRows.map(row => ({
@@ -317,9 +326,19 @@ function priceExamples(rows, platform, limit = 3) {
       normalizedEventKey: row.normalizedEventKey,
       odds: row.normalizedAmericanOdds
     })).slice(0, 20),
+    nyyDetDateCheck: nyyDetRows.map(row => ({
+      platform: row.platform,
+      rawTitle: row.rawTitle,
+      side: row.side,
+      rawCommenceTime: row.rawCommenceTime,
+      displayedLocalDate: row.displayedLocalDate,
+      normalizedEventKey: row.normalizedEventKey,
+      odds: row.normalizedAmericanOdds
+    })).slice(0, 20),
     first5GroupedCards: cards.slice(0, 5).map(card => ({
       key: card.key,
       margin: Number(card.margin.toFixed(2)),
+      isLive: card.isLive,
       main: card.main.map(row => `${row.platform}: ${row.side} ${row.normalizedAmericanOdds}`),
       sideA: card.sideA.map(row => `${row.platform}: ${row.side} ${row.normalizedAmericanOdds}`),
       sideB: card.sideB.map(row => `${row.platform}: ${row.side} ${row.normalizedAmericanOdds}`)
@@ -330,13 +349,14 @@ function priceExamples(rows, platform, limit = 3) {
     failures: {
       disappearedSportsbooks,
       atlSdWrongDateCount: atlSdWrongDate.length,
+      nyyDetWrongDateCount: nyyDetWrongDate.length,
       duplicateCardCount: duplicateKeys.length,
       polymarketPriceMismatchCount: priceExamples(rows, 'polymarket', 20).filter(r => r.expectedAmerican !== r.displayedAmerican).length,
       kalshiPriceMismatchCount: priceExamples(rows, 'kalshi', 20).filter(r => r.expectedAmerican !== r.displayedAmerican).length
     }
   };
   console.log(JSON.stringify(output, null, 2));
-  if (output.failures.disappearedSportsbooks.length || output.failures.atlSdWrongDateCount || output.failures.duplicateCardCount || output.failures.polymarketPriceMismatchCount || output.failures.kalshiPriceMismatchCount) {
+  if (output.failures.disappearedSportsbooks.length || output.failures.atlSdWrongDateCount || output.failures.nyyDetWrongDateCount || output.failures.duplicateCardCount || output.failures.polymarketPriceMismatchCount || output.failures.kalshiPriceMismatchCount) {
     process.exit(1);
   }
 })().catch(error => {

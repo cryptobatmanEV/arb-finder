@@ -667,6 +667,16 @@ function gameKeyFromKalshiTicker(ticker) {
   return `${sport}-${away}-${home}-${year}-${mon}-${day}`;
 }
 
+function kalshiStartTimeFromTicker(ticker) {
+  const middle = (ticker || '').split('-')[1] || '';
+  const m = middle.match(/(\d{2})([A-Z]{3})(\d{2})(\d{4})/);
+  if (!m) return null;
+  const mon = KA_MONTHS[m[2]] || '01';
+  const hour = m[4].slice(0, 2);
+  const min = m[4].slice(2, 4);
+  return `20${m[1]}-${mon}-${m[3]}T${hour}:${min}:00Z`;
+}
+
 // ─── POLYMARKET NORMALIZER ────────────────────────────────────────────────────
 function extractPolymarketStructure(m) {
   const title = m.question || m.title || '';
@@ -757,11 +767,8 @@ function extractPolymarketStructure(m) {
   // If clobYesBuy/clobNoBuy are null, the proxy already determined market isn't real
   const fallbackYes = parseFloat(fallback[0] || 0);
   const fallbackNo = parseFloat(fallback[1] || 0);
-  const yesPrice = clobYesRaw > 0.01 ? clobYesRaw : bestAsk > 0.01 ? bestAsk : clobYes > 0.01 ? clobYes : fallbackYes;
-  const noCandidate = clobNoRaw > 0.01 ? clobNoRaw : clobNo > 0.01 ? clobNo : fallbackNo > 0.01 ? fallbackNo : bestBid > 0.01 ? (1 - bestBid) : 0;
-  const noPrice = fallbackNo > 0.01 && (!noCandidate || Math.abs(noCandidate - fallbackNo) > 0.15 || (yesPrice > 0.01 && yesPrice + noCandidate > 1.2))
-    ? fallbackNo
-    : noCandidate;
+  const yesPrice = bestAsk > 0.01 ? bestAsk : fallbackYes > 0.01 ? fallbackYes : clobYesRaw > 0.01 ? clobYesRaw : clobYes;
+  const noPrice = fallbackNo > 0.01 ? fallbackNo : clobNoRaw > 0.01 ? clobNoRaw : clobNo > 0.01 ? clobNo : bestBid > 0.01 ? (1 - bestBid) : 0;
 
   if (!yesPrice || yesPrice < 0.02 || yesPrice > 0.98) return null;
   // Reject markets where $50 is not fully fillable (too illiquid to arb)
@@ -780,8 +787,8 @@ function extractPolymarketStructure(m) {
     priceAudit: {
       source: 'polymarket',
       rawTitle: title,
-      yesFieldUsed: clobYesRaw > 0.01 ? 'clobYesRawBuy' : bestAsk > 0.01 ? 'bestAsk' : clobYes > 0.01 ? 'clobYesBuy_fee_adjusted' : 'outcomePrices[0]',
-      noFieldUsed: clobNoRaw > 0.01 ? 'clobNoRawBuy' : clobNo > 0.01 ? 'clobNoBuy_fee_adjusted' : fallbackNo > 0.01 ? 'outcomePrices[1]' : '1 - bestBid',
+      yesFieldUsed: bestAsk > 0.01 ? 'bestAsk' : fallbackYes > 0.01 ? 'outcomePrices[0]' : clobYesRaw > 0.01 ? 'clobYesRawBuy_depth' : 'clobYesBuy_fee_adjusted',
+      noFieldUsed: fallbackNo > 0.01 ? 'outcomePrices[1]' : clobNoRaw > 0.01 ? 'clobNoRawBuy_depth' : clobNo > 0.01 ? 'clobNoBuy_fee_adjusted' : '1 - bestBid',
       rawYesPrice: yesPrice,
       rawNoPrice: noPrice,
       clobYesRawBuy: m.clobYesRawBuy ?? null,
@@ -815,13 +822,13 @@ function extractKalshiStructure(m) {
   else if (/^KXNHL/.test(series)) sport = 'nhl';
   else if (/KXBTC|KXETH/.test(series)) sport = 'crypto';
 
-  let marketType, line, player, statType, gameKey, teams, gameDate, winnerTeam = null;
+  let marketType, line, player, statType, gameKey, teams, gameDate, startTime, winnerTeam = null;
 
   if (isFutures) {
     marketType = 'championship';
     const teamCode = ticker.split('-').pop();
     const teamName = KALSHI_CODES[teamCode] || teamCode.toLowerCase();
-    teams = [teamName]; gameKey = null; line = null; player = null; statType = null; gameDate = null;
+    teams = [teamName]; gameKey = null; line = null; player = null; statType = null; gameDate = null; startTime = null;
   } else {
     // Derive gameKey from ticker
     gameKey = gameKeyFromKalshiTicker(ticker);
@@ -878,6 +885,7 @@ function extractKalshiStructure(m) {
     teams = dIdx >= 2 ? gkParts.slice(1, dIdx) : [];
     const dateM2 = gameKey.match(/(\d{4}-\d{2}-\d{2})$/);
     gameDate = dateM2 ? dateM2[1] : null;
+    startTime = kalshiStartTimeFromTicker(ticker);
   }
 
   const yAsk = parseFloat(m.yes_ask_dollars) || 0;
@@ -941,7 +949,7 @@ function extractKalshiStructure(m) {
     normalizedLine: line ?? null,
     normalizedOdds: probToAmerican(price),
     normalizedProbability: price,
-    rawCommenceTime: gameDate || null,
+    rawCommenceTime: startTime || gameDate || null,
     displayedDate: gameDate || null,
     cacheStatus: 'frontend-normalized'
   });
@@ -951,7 +959,7 @@ function extractKalshiStructure(m) {
     platform: 'kalshi',
     rawTitle: title,
     sport, gameKey, teams: teams || [], marketType, line,
-    player, statType, gameDate: gameDate || null, isFutures: !!isFutures, winnerTeam,
+    player, statType, gameDate: gameDate || null, startTime: startTime || null, isFutures: !!isFutures, winnerTeam,
     yesPrice: yesFinal, noPrice: noFinal,
     rawPrice: yesFinal,
     rawNoPrice: noFinal,
@@ -2014,6 +2022,14 @@ function displayLocalDate(rawTime, fallback = null) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
+function isLiveGameTime(rawTime) {
+  const startMs = new Date(rawTime || '').getTime();
+  if (!Number.isFinite(startMs)) return false;
+  const now = Date.now();
+  const fiveHours = 5 * 60 * 60 * 1000;
+  return now >= startMs && now <= startMs + fiveHours;
+}
+
 function canonicalBoardRows(markets) {
   const rows = [];
   (markets || []).forEach(market => {
@@ -2044,6 +2060,7 @@ function canonicalBoardRows(markets) {
         rawTitle: leg.rawTitle,
         sourceProof: proof,
         sourceMarket: market,
+        isLive: !!market.isLive || isLiveGameTime(rawTime),
         rawPrice: leg.rawPrice ?? (outcome === 'YES' ? market.rawPrice : market.rawNoPrice) ?? leg.price
       });
     });
@@ -2134,6 +2151,7 @@ function boardRowsToOpportunities(boardRows) {
     const [sideAKey, sideBKey] = [...bySide.keys()].sort();
     const sideA = dedupeBoardRows(bySide.get(sideAKey));
     const sideB = dedupeBoardRows(bySide.get(sideBKey));
+    const groupIsLive = rows.some(row => row.isLive);
     const best = bestBoardPair(sideA, sideB);
     if (!best) {
       skipped.no_cross_book_pair = (skipped.no_cross_book_pair || 0) + 1;
@@ -2173,6 +2191,7 @@ function boardRowsToOpportunities(boardRows) {
       roi: isArb ? (1 / denom - 1) * 100 : 0,
       isArb,
       isNear,
+      isLive: groupIsLive,
       groupedCount: sideA.length * sideB.length,
       sideBoards: {
         legA: sideA.map(row => ({ ...boardRowToLeg(row), label: row.exactBet, relation: relationToMain(row.price, best.a.price, row.platform, best.a.platform) })),
