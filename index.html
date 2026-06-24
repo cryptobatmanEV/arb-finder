@@ -995,6 +995,7 @@ function fallbackSourceProof(m, outcome, price) {
     rawBookmakerKey: m.platform || null,
     rawBookmakerTitle: PLAT_LB[m.platform] || m.platform || null,
     rawMarketKey: m.marketType || null,
+    normalizedMarketType: m.marketType || null,
     rawOutcomeName: title || null,
     rawOutcomePrice: outcome === 'YES' ? (m.rawPrice ?? m.yesPrice ?? null) : (m.rawNoPrice ?? m.noPrice ?? null),
     rawOutcomePoint: m.line ?? null,
@@ -1024,7 +1025,89 @@ function selectedSourceProof(m, outcome, price) {
   return m.sourceProof?.[outcome] || fallbackSourceProof(m, outcome, price);
 }
 
+function proofMarketFamily(m) {
+  return m.sourceProof?.YES?.normalizedMarketType
+    || m.sourceProof?.NO?.normalizedMarketType
+    || m.sourceProof?.YES?.rawMarketKey
+    || m.sourceProof?.NO?.rawMarketKey
+    || m.marketType
+    || null;
+}
+
+function validateArbMarketPair(mA, mB) {
+  const fail = (reason) => ({
+    passed: false,
+    reason,
+    marketFamily: mA?.marketType || null,
+    legA: {
+      platform: mA?.platform || null,
+      rawMarketKey: mA?.sourceProof?.YES?.rawMarketKey || mA?.sourceProof?.NO?.rawMarketKey || null,
+      normalizedMarketType: mA?.marketType || null,
+      proofMarketFamily: proofMarketFamily(mA),
+      line: mA?.line ?? null,
+      gameKey: mA?.gameKey || null
+    },
+    legB: {
+      platform: mB?.platform || null,
+      rawMarketKey: mB?.sourceProof?.YES?.rawMarketKey || mB?.sourceProof?.NO?.rawMarketKey || null,
+      normalizedMarketType: mB?.marketType || null,
+      proofMarketFamily: proofMarketFamily(mB),
+      line: mB?.line ?? null,
+      gameKey: mB?.gameKey || null
+    }
+  });
+
+  if (!mA || !mB) return fail('missing_market');
+  if (!mA.gameKey || !mB.gameKey || mA.gameKey !== mB.gameKey) return fail('different_event');
+  if (!mA.marketType || !mB.marketType || mA.marketType !== mB.marketType) return fail('mixed_market_type');
+  if (!['moneyline', 'spread', 'total'].includes(mA.marketType)) return fail('unsupported_market_family');
+
+  const proofA = proofMarketFamily(mA);
+  const proofB = proofMarketFamily(mB);
+  if (proofA && proofA !== mA.marketType && !(proofA === 'h2h' && mA.marketType === 'moneyline')) return fail('leg_a_raw_market_mismatch');
+  if (proofB && proofB !== mB.marketType && !(proofB === 'h2h' && mB.marketType === 'moneyline')) return fail('leg_b_raw_market_mismatch');
+
+  if (mA.marketType === 'moneyline') {
+    if (mA.line != null || mB.line != null) return fail('moneyline_has_line');
+  }
+
+  if (mA.marketType === 'spread') {
+    if (mA.line == null || mB.line == null) return fail('spread_missing_line');
+    if (Math.abs(Number(mA.line) - Number(mB.line)) > 0.001) return fail('spread_line_mismatch');
+    if (mA.favoredTeam && mB.favoredTeam && mA.favoredTeam !== mB.favoredTeam) return fail('spread_side_mismatch');
+  }
+
+  if (mA.marketType === 'total') {
+    if (mA.line == null || mB.line == null) return fail('total_missing_line');
+    if (Math.abs(Number(mA.line) - Number(mB.line)) > 0.001) return fail('total_line_mismatch');
+  }
+
+  return {
+    passed: true,
+    marketFamily: mA.marketType,
+    legA: {
+      platform: mA.platform,
+      rawMarketKey: mA.sourceProof?.YES?.rawMarketKey || mA.sourceProof?.NO?.rawMarketKey || null,
+      normalizedMarketType: mA.marketType,
+      proofMarketFamily: proofA,
+      line: mA.line ?? null,
+      gameKey: mA.gameKey
+    },
+    legB: {
+      platform: mB.platform,
+      rawMarketKey: mB.sourceProof?.YES?.rawMarketKey || mB.sourceProof?.NO?.rawMarketKey || null,
+      normalizedMarketType: mB.marketType,
+      proofMarketFamily: proofB,
+      line: mB.line ?? null,
+      gameKey: mB.gameKey
+    }
+  };
+}
+
 function calcArb(mA, mB) {
+  const matchValidation = validateArbMarketPair(mA, mB);
+  if (!matchValidation.passed) return null;
+
   const combos = [
     { oA:'YES', oB:'NO',  pA: mA.yesPrice, pB: mB.noPrice  },
     { oA:'NO',  oB:'YES', pA: mA.noPrice,  pB: mB.yesPrice },
@@ -1091,6 +1174,7 @@ function calcArb(mA, mB) {
       sourceProof: selectedSourceProof(mB, best.oB, best.pB),
     },
     matchGroupKey,
+    matchValidation,
     impliedSum: best.sum * 100,
     margin, profit, roi, isArb, isNear,
     isLive: mA.isLive || mB.isLive || false,
@@ -1356,6 +1440,7 @@ function enrichSourceProof(proof, market, side, gameDate, dedupeKey, matchGroupK
     rawBookmakerKey: proof.rawBookmakerKey || market.platform,
     rawBookmakerTitle: proof.rawBookmakerTitle || market.bookTitle || market.platform,
     rawMarketKey: proof.rawMarketKey || market.marketType || null,
+    normalizedMarketType: proof.normalizedMarketType || market.marketType || null,
     rawOutcomeName: proof.rawOutcomeName || null,
     rawOutcomePrice: proof.rawOutcomePrice ?? null,
     rawOutcomePoint: proof.rawOutcomePoint ?? null,
@@ -1777,6 +1862,16 @@ function SourceProofDebug({ leg }) {
   );
 }
 
+function MatchValidationDebug({ validation }) {
+  if (!DEBUG_MODE || !validation) return null;
+  return (
+    <details className="oj-debug">
+      <summary>match validation</summary>
+      <pre style={{whiteSpace:'pre-wrap', marginTop:6}}>{JSON.stringify(validation, null, 2)}</pre>
+    </details>
+  );
+}
+
 function AlsoAvailable({ opp }) {
   const alt = opp.alternatives || {};
   const legAAlternates = (alt.legA || []).filter(book => book.platform !== opp.legA.platform);
@@ -1883,6 +1978,8 @@ function ArbCard({ opp }) {
         <ArbLeg leg={legB} stake={stakeB} onStakeChange={handleStakeB} label="LEG 2" />
       </div>
 
+      <MatchValidationDebug validation={opp.matchValidation} />
+
       {/* Quick stake buttons */}
       <div className="oj-quick-row">
         <span className="oj-calc-lbl">Quick set total:</span>
@@ -1922,6 +2019,10 @@ function ArbCard({ opp }) {
 
 function humanOutcome(title, outcome) {
   const t = title || '';
+  const sportsbookSpread = t.match(/^Spread:\s+(.+?)\s+\(([+-]?[\d.]+)\)/i);
+  if (sportsbookSpread) {
+    return `${sportsbookSpread[1].trim()} ${sportsbookSpread[2]}`;
+  }
   // Moneyline: "Thunder vs. Suns" YES → "Thunder wins"
   // Moneyline: "Thunder vs. Suns" NO  → "Suns wins"
   const vsM = t.match(/^(.+?)\s+vs\.?\s+(.+?)(\s*:.*)?$/i);
@@ -2084,7 +2185,13 @@ function App() {
     const arbList = [], nearList = [];
     let parlayArbOrNearPairs = 0;
     let sportsbookArbOrNearPairs = 0;
+    const matchValidationSkips = {};
     matched.forEach(([mA, mB]) => {
+      const validation = validateArbMarketPair(mA, mB);
+      if (!validation.passed) {
+        matchValidationSkips[validation.reason] = (matchValidationSkips[validation.reason] || 0) + 1;
+        return;
+      }
       const opp = calcArb(mA, mB);
       if (!opp) return;
       if (mA.source === 'parlay' || mB.source === 'parlay') parlayArbOrNearPairs += 1;
@@ -2099,8 +2206,8 @@ function App() {
     setNear(nearList);
     const resultOpps = [...arbList, ...nearList];
     const first20LegProofs = resultOpps.slice(0, 10).flatMap((opp, idx) => ([
-      { cardIndex: idx + 1, leg: 'A', platform: opp.legA.platform, outcome: opp.legA.outcome, proof: opp.legA.sourceProof || null },
-      { cardIndex: idx + 1, leg: 'B', platform: opp.legB.platform, outcome: opp.legB.outcome, proof: opp.legB.sourceProof || null }
+      { cardIndex: idx + 1, leg: 'A', platform: opp.legA.platform, outcome: opp.legA.outcome, matchValidation: opp.matchValidation || null, proof: opp.legA.sourceProof || null },
+      { cardIndex: idx + 1, leg: 'B', platform: opp.legB.platform, outcome: opp.legB.outcome, matchValidation: opp.matchValidation || null, proof: opp.legB.sourceProof || null }
     ]));
     const debugCounts = {
       coreMarketsByPlatform: {
@@ -2116,7 +2223,9 @@ function App() {
       sportsbookArbOrNearPairs,
       topMatchedPairsByPlatform: topEntries(countPairsByPlatform(matched), 20),
       topResultCardsByPlatform: topEntries(countOppsByPlatform(resultOpps), 20),
-      sportsbookResultCardsTotal: resultOpps.filter(o => involvesPlatformSet(o, sportsbookSet)).length
+      sportsbookResultCardsTotal: resultOpps.filter(o => involvesPlatformSet(o, sportsbookSet)).length,
+      matchValidationSkips,
+      mixedMarketMatchesSkipped: matchValidationSkips.mixed_market_type || 0
     };
     console.debug('[Scanner] first 20 displayed leg source proofs', first20LegProofs);
     if (window.__PARLAY_DEBUG) {

@@ -66,17 +66,14 @@ const SPORTSBOOK_BOOK_SET = new Set([
   'sugarhouse',
   'tipico'
 ]);
-const AUDIT_ONLY_BOOK_KEYS = [
-  // Manual checks showed material ParlayAPI mismatches. Keep these available
-  // through audit/debug endpoints, but do not use them in live arb cards.
-  'bovada',
-  'draftkings'
-];
+const AUDIT_ONLY_BOOK_KEYS = [];
 const AUDIT_ONLY_BOOK_SET = new Set(AUDIT_ONLY_BOOK_KEYS);
 const TRUSTED_LIVE_BOOK_KEYS = [
+  'draftkings',
   'fanduel',
   'betmgm',
   'caesars',
+  'bovada',
   'bet365',
   'fanatics',
   'hardrock',
@@ -186,8 +183,7 @@ function isAuditOnlyBook(platform) {
 }
 
 function isTrustedLiveBook(platform) {
-  if (!SPORTSBOOK_BOOK_SET.has(platform)) return true;
-  return TRUSTED_LIVE_BOOK_SET.has(platform);
+  return true;
 }
 
 function lastUpdateAgeSeconds(book, market, fetchTimestamp) {
@@ -213,7 +209,7 @@ function requestPath(endpoint, params = {}) {
   return `/v1${endpoint}${query ? `?${query}` : ''}`;
 }
 
-function proofBase(meta, ev, book, market) {
+function proofBase(meta, ev, book, market, normalizedMarketType = null) {
   const lastUpdate = book?.last_update || market?.last_update || null;
   const ageSeconds = lastUpdateAgeSeconds(book, market, meta?.fetchTimestamp);
   return {
@@ -223,6 +219,7 @@ function proofBase(meta, ev, book, market) {
     rawBookmakerKey: book?.key || null,
     rawBookmakerTitle: book?.title || book?.key || null,
     rawMarketKey: market?.key || null,
+    normalizedMarketType,
     rawCommenceTime: ev?.commence_time || null,
     displayedDate: String(ev?.commence_time || '').slice(0, 10) || null,
     lastUpdate,
@@ -528,8 +525,8 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
           yesPrice,
           noPrice,
           sourceProof: {
-            YES: sideProof(proofBase(meta, ev, book, market), awayOut, `${away} wins`, awayOut?.price ?? null),
-            NO: sideProof(proofBase(meta, ev, book, market), homeOut, `${home} wins`, homeOut?.price ?? null)
+            YES: sideProof(proofBase(meta, ev, book, market, 'moneyline'), awayOut, `${away} wins`, awayOut?.price ?? null),
+            NO: sideProof(proofBase(meta, ev, book, market, 'moneyline'), homeOut, `${home} wins`, homeOut?.price ?? null)
           },
           rawTitle: `${away} vs ${home}`,
           noTitle: `${away} vs ${home}`,
@@ -569,8 +566,8 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
           yesPrice,
           noPrice,
           sourceProof: {
-            YES: sideProof(proofBase(meta, ev, book, market), over, `Over ${point}`, over?.price ?? null),
-            NO: sideProof(proofBase(meta, ev, book, market), under, `Under ${point}`, under?.price ?? null)
+            YES: sideProof(proofBase(meta, ev, book, market, 'total'), over, `Over ${point}`, over?.price ?? null),
+            NO: sideProof(proofBase(meta, ev, book, market, 'total'), under, `Under ${point}`, under?.price ?? null)
           },
           rawTitle: `${away} vs ${home}: O/U ${point}`,
           noTitle: `${away} vs ${home}: O/U ${point}`,
@@ -614,8 +611,8 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
           yesPrice,
           noPrice,
           sourceProof: {
-            YES: sideProof(proofBase(meta, ev, book, market), awayOut, `${away} ${awayPoint > 0 ? '+' : ''}${awayPoint}`, awayOut?.price ?? null),
-            NO: sideProof(proofBase(meta, ev, book, market), homeOut, `${home} ${homePoint > 0 ? '+' : ''}${homePoint}`, homeOut?.price ?? null)
+            YES: sideProof(proofBase(meta, ev, book, market, 'spread'), awayOut, `${away} ${awayPoint > 0 ? '+' : ''}${awayPoint}`, awayOut?.price ?? null),
+            NO: sideProof(proofBase(meta, ev, book, market, 'spread'), homeOut, `${home} ${homePoint > 0 ? '+' : ''}${homePoint}`, homeOut?.price ?? null)
           },
           favoredTeamName: away,
           rawTitle: `Spread: ${away} (${awayPoint > 0 ? '+' : ''}${awayPoint})`,
