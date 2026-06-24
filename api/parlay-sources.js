@@ -383,6 +383,33 @@ function setDiff(allRows, seenRows) {
   return allRows.filter(row => !seen.has(row.key));
 }
 
+function findBovadaAtlSdRows(rows) {
+  const matches = [];
+  for (const ev of rows || []) {
+    const home = String(ev.home_team || '').toLowerCase();
+    const away = String(ev.away_team || '').toLowerCase();
+    const isAtlSd = (home.includes('atlanta') && away.includes('san diego')) ||
+      (home.includes('san diego') && away.includes('atlanta'));
+    if (!isAtlSd) continue;
+    for (const book of ev.bookmakers || []) {
+      if (sourceKey(book) !== 'bovada') continue;
+      for (const market of book.markets || []) {
+        for (const outcome of market.outcomes || []) {
+          const outcomeName = String(outcome.name || '').toLowerCase();
+          if (!outcomeName.includes('atlanta')) continue;
+          matches.push({
+            event: ev,
+            bookmaker: book,
+            market,
+            outcome
+          });
+        }
+      }
+    }
+  }
+  return matches;
+}
+
 function excludedActiveSports(sportsRows) {
   return sportsRows
     .filter(row => row.active && !SPORTS.includes(row.key))
@@ -408,6 +435,7 @@ module.exports = async function handler(req, res) {
     const auditInventory = url.searchParams.get('auditInventory') === '1';
     const auditMlbShapes = url.searchParams.get('auditMlbShapes') === '1';
     const auditProductionIssues = url.searchParams.get('auditProductionIssues') === '1';
+    const auditBovadaAtlSd = url.searchParams.get('auditBovadaAtlSd') === '1';
     const checks = [];
     const bookmakerSeen = {};
     const exchangeSeen = {};
@@ -433,6 +461,86 @@ module.exports = async function handler(req, res) {
       .filter(Boolean)
       .sort();
     const sportsByKey = new Map(sports.rows.map(row => [row.key, row]));
+
+    if (auditBovadaAtlSd) {
+      const cases = [
+        {
+          label: 'production all-books with date filter',
+          params: {
+            regions: 'us',
+            markets: 'h2h,spreads,totals',
+            oddsFormat: 'american',
+            commenceTimeFrom: timeWindow.commenceTimeFrom,
+            commenceTimeTo: timeWindow.commenceTimeTo
+          }
+        },
+        {
+          label: 'bovada supplement with date filter',
+          params: {
+            bookmakers: 'bovada',
+            markets: 'h2h,spreads,totals',
+            oddsFormat: 'american',
+            commenceTimeFrom: timeWindow.commenceTimeFrom,
+            commenceTimeTo: timeWindow.commenceTimeTo
+          }
+        },
+        {
+          label: 'bovada supplement without date filter',
+          params: {
+            bookmakers: 'bovada',
+            markets: 'h2h,spreads,totals',
+            oddsFormat: 'american'
+          }
+        }
+      ];
+      const results = [];
+      for (const item of cases) {
+        const result = await callParlay('/sports/baseball_mlb/odds', item.params);
+        checks.push(result);
+        const matches = findBovadaAtlSdRows(result.rows);
+        results.push({
+          label: item.label,
+          endpoint: result.endpoint,
+          query: result.query,
+          status: result.status,
+          ok: result.ok,
+          creditHeaders: result.creditHeaders,
+          rawEventCount: result.rows.length,
+          matchesFound: matches.length,
+          exactRows: matches.map(match => ({
+            event_id: match.event.id || null,
+            commence_time: match.event.commence_time || null,
+            home_team: match.event.home_team || null,
+            away_team: match.event.away_team || null,
+            bookmaker_key: match.bookmaker.key || null,
+            bookmaker_title: match.bookmaker.title || null,
+            bookmaker_last_update: match.bookmaker.last_update || null,
+            market_key: match.market.key || null,
+            market_last_update: match.market.last_update || null,
+            outcome_name: match.outcome.name || null,
+            outcome_price: match.outcome.price ?? null,
+            outcome_point: match.outcome.point ?? null,
+            rawEvent: match.event,
+            rawBookmaker: match.bookmaker,
+            rawMarket: match.market,
+            rawOutcome: match.outcome
+          }))
+        });
+      }
+      return res.status(200).json({
+        pulledAt: new Date().toISOString(),
+        audit: 'bovada_atl_sd',
+        target: {
+          sport: 'baseball_mlb',
+          game: 'ATL vs SD',
+          bookmaker: 'bovada',
+          outcome: 'Atlanta Braves',
+          displayedPriceToInvestigate: -109
+        },
+        timeWindow,
+        results
+      });
+    }
 
     if (auditProductionIssues) {
       const startedAt = Date.now();
