@@ -289,7 +289,11 @@ function priceExamples(rows, platform, limit = 3) {
   const { cards, duplicateKeys } = matchBoard(rows);
   const visibleBooks = new Set(cards.flatMap(card => [...card.sideA, ...card.sideB].map(row => row.platform)));
   const seenBooks = new Set(rows.map(row => row.platform));
-  const disappearedSportsbooks = [...seenBooks].filter(book => SPORTSBOOK.has(book) && !visibleBooks.has(book));
+  const renderedMarketKeys = new Set(cards.map(card => card.key));
+  const booksExpectedInRenderedMarkets = new Set(rows
+    .filter(row => renderedMarketKeys.has([row.normalizedEventKey, row.marketType, row.line ?? ''].join('|')))
+    .map(row => row.platform));
+  const disappearedSportsbooks = [...booksExpectedInRenderedMarkets].filter(book => SPORTSBOOK.has(book) && !visibleBooks.has(book));
   const atlSdRows = rows.filter(row => /atl|braves/i.test(row.normalizedEventKey + row.side + row.rawTitle) && /sd|padres/i.test(row.normalizedEventKey + row.side + row.rawTitle));
   const atlSdWrongDate = atlSdRows.filter(row => String(row.displayedLocalDate || '').startsWith('2026-07-02'));
   const output = {
@@ -332,7 +336,7 @@ function priceExamples(rows, platform, limit = 3) {
     }
   };
   console.log(JSON.stringify(output, null, 2));
-  if (output.failures.atlSdWrongDateCount || output.failures.duplicateCardCount || output.failures.polymarketPriceMismatchCount || output.failures.kalshiPriceMismatchCount) {
+  if (output.failures.disappearedSportsbooks.length || output.failures.atlSdWrongDateCount || output.failures.duplicateCardCount || output.failures.polymarketPriceMismatchCount || output.failures.kalshiPriceMismatchCount) {
     process.exit(1);
   }
 })().catch(error => {
