@@ -410,6 +410,77 @@ function findBovadaAtlSdRows(rows) {
   return matches;
 }
 
+const ACCURACY_TARGETS = [
+  { id: 'bovada_tex_mia', book: 'bovada', teams: ['texas', 'miami'], expected: {
+    h2h: { 'Texas Rangers': -125, 'Miami Marlins': 105 },
+    spreads: { 'Texas Rangers_-1.5': 135, 'Miami Marlins_1.5': -160 },
+    totals: { 'Over_7.5': -105, 'Under_7.5': -115 }
+  }},
+  { id: 'bovada_atl_sd', book: 'bovada', teams: ['atlanta', 'san diego'] },
+  { id: 'bovada_oak_sf', book: 'bovada', teams: ['athletics', 'san francisco'] },
+  { id: 'draftkings_atl_sd', book: 'draftkings', teams: ['atlanta', 'san diego'], expected: {
+    h2h: { 'San Diego Padres': 113 }
+  }}
+];
+
+function eventMatchesTeams(ev, terms) {
+  const haystack = `${ev?.home_team || ''} ${ev?.away_team || ''}`.toLowerCase();
+  return terms.every(term => haystack.includes(term));
+}
+
+function expectedKey(market, outcome) {
+  if (market?.key === 'h2h') return outcome?.name || '';
+  return `${outcome?.name || ''}_${outcome?.point ?? ''}`;
+}
+
+function auditTargetMatches(rows, target) {
+  const matches = [];
+  for (const ev of rows || []) {
+    if (!eventMatchesTeams(ev, target.teams)) continue;
+    for (const book of ev.bookmakers || []) {
+      if (sourceKey(book) !== target.book) continue;
+      for (const market of book.markets || []) {
+        for (const outcome of market.outcomes || []) {
+          const expected = target.expected?.[market.key]?.[expectedKey(market, outcome)] ?? null;
+          matches.push({
+            targetId: target.id,
+            event_id: ev.id || null,
+            canonical_event_id: ev.canonical_event_id || null,
+            commence_time: ev.commence_time || null,
+            home_team: ev.home_team || null,
+            away_team: ev.away_team || null,
+            book_key: book.key || null,
+            book_title: book.title || null,
+            book_last_update: book.last_update || null,
+            market_key: market.key || null,
+            market_last_update: market.last_update || null,
+            outcome_name: outcome.name || null,
+            outcome_price: outcome.price ?? null,
+            outcome_point: outcome.point ?? null,
+            expected_manual_price: expected,
+            delta_vs_manual: expected == null || outcome.price == null ? null : Number(outcome.price) - Number(expected),
+            normalizedDisplayed: {
+              marketType: market.key === 'h2h' ? 'moneyline' : market.key === 'spreads' ? 'spread' : market.key === 'totals' ? 'total' : market.key,
+              side: market.key === 'spreads'
+                ? `${outcome.name} ${Number(outcome.point) > 0 ? '+' : ''}${outcome.point}`
+                : market.key === 'totals'
+                  ? `${outcome.name} ${outcome.point}`
+                  : outcome.name,
+              displayedOdds: outcome.price ?? null,
+              sourcePriceType: 'american'
+            },
+            rawEvent: ev,
+            rawBookmaker: book,
+            rawMarket: market,
+            rawOutcome: outcome
+          });
+        }
+      }
+    }
+  }
+  return matches;
+}
+
 function excludedActiveSports(sportsRows) {
   return sportsRows
     .filter(row => row.active && !SPORTS.includes(row.key))
@@ -436,6 +507,7 @@ module.exports = async function handler(req, res) {
     const auditMlbShapes = url.searchParams.get('auditMlbShapes') === '1';
     const auditProductionIssues = url.searchParams.get('auditProductionIssues') === '1';
     const auditBovadaAtlSd = url.searchParams.get('auditBovadaAtlSd') === '1';
+    const auditAccuracy = url.searchParams.get('auditAccuracy') === '1';
     const checks = [];
     const bookmakerSeen = {};
     const exchangeSeen = {};
@@ -461,6 +533,51 @@ module.exports = async function handler(req, res) {
       .filter(Boolean)
       .sort();
     const sportsByKey = new Map(sports.rows.map(row => [row.key, row]));
+
+    if (auditAccuracy) {
+      const bookSet = [...new Set(ACCURACY_TARGETS.map(target => target.book))];
+      const cases = [
+        ['all-books h2h/spreads/totals', { regions: 'us', markets: 'h2h,spreads,totals', oddsFormat: 'american', commenceTimeFrom: timeWindow.commenceTimeFrom, commenceTimeTo: timeWindow.commenceTimeTo }]
+      ];
+      for (const book of bookSet) {
+        cases.push(
+          [`${book} h2h/spreads/totals`, { bookmakers: book, markets: 'h2h,spreads,totals', oddsFormat: 'american', commenceTimeFrom: timeWindow.commenceTimeFrom, commenceTimeTo: timeWindow.commenceTimeTo }],
+          [`${book} h2h only`, { bookmakers: book, markets: 'h2h', oddsFormat: 'american', commenceTimeFrom: timeWindow.commenceTimeFrom, commenceTimeTo: timeWindow.commenceTimeTo }],
+          [`${book} spreads only`, { bookmakers: book, markets: 'spreads', oddsFormat: 'american', commenceTimeFrom: timeWindow.commenceTimeFrom, commenceTimeTo: timeWindow.commenceTimeTo }],
+          [`${book} totals only`, { bookmakers: book, markets: 'totals', oddsFormat: 'american', commenceTimeFrom: timeWindow.commenceTimeFrom, commenceTimeTo: timeWindow.commenceTimeTo }]
+        );
+      }
+
+      const results = [];
+      for (const [label, params] of cases) {
+        const result = await callParlay('/sports/baseball_mlb/odds', params);
+        checks.push(result);
+        const targetMatches = {};
+        for (const target of ACCURACY_TARGETS) {
+          targetMatches[target.id] = auditTargetMatches(result.rows, target);
+        }
+        results.push({
+          label,
+          endpoint: result.endpoint,
+          query: result.query,
+          status: result.status,
+          ok: result.ok,
+          responseMs: result.elapsedMs,
+          creditHeaders: result.creditHeaders,
+          rawEventCount: result.rows.length,
+          ...summarizeOddsRows(result.rows),
+          targetMatches
+        });
+      }
+      return res.status(200).json({
+        pulledAt: new Date().toISOString(),
+        audit: 'accuracy_examples',
+        sourcePriceType: 'american',
+        timeWindow,
+        targets: ACCURACY_TARGETS,
+        results
+      });
+    }
 
     if (auditBovadaAtlSd) {
       const cases = [

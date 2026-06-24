@@ -503,47 +503,48 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
       }
 
       if (key === 'spreads') {
-        for (const side of outcomes) {
-          const team = side.name;
-          const point = side.point;
-          const yesPrice = implied(side.price);
+        const awayOut = outcomes.find(o => o.name === away);
+        const homeOut = outcomes.find(o => o.name === home);
+        const awayPoint = Number(awayOut?.point);
+        const homePoint = Number(homeOut?.point);
+        const yesPrice = implied(awayOut?.price);
+        const noPrice = implied(homeOut?.price);
 
-          if (!team || point == null || !yesPrice) {
-            noteSkip(debug, 'spread_missing_team_price_or_line');
-            continue;
-          }
-
-          const other = outcomes.find(o => o.name !== team);
-          const noPrice = implied(other?.price);
-
-          if (!noPrice) {
-            noteSkip(debug, 'spread_missing_other_price');
-            continue;
-          }
-
-          out.push({
-            id: `${ev.id}-${platform}-spread-${team}-${point}`,
-            source: 'parlay',
-            platform,
-            bookTitle,
-            sport: sportShort(sport),
-            marketType: 'spread',
-            home,
-            away,
-            startTime,
-            line: Math.abs(Number(point)),
-            yesPrice,
-            noPrice,
-            sourceProof: {
-              YES: sideProof(proofBase(meta, ev, book, market), side, `${team} ${point}`, side?.price ?? null),
-              NO: sideProof(proofBase(meta, ev, book, market), other, `${other?.name || 'opponent'} ${other?.point ?? ''}`, other?.price ?? null)
-            },
-            favoredTeamName: team,
-            rawTitle: `Spread: ${team} (${Number(point) > 0 ? '+' : ''}${point})`,
-            noTitle: `Spread: ${team} (${Number(point) > 0 ? '+' : ''}${point})`,
-            url: googleUrl(bookTitle, away, home)
-          });
+        if (!awayOut || !homeOut || !Number.isFinite(awayPoint) || !Number.isFinite(homePoint) || !yesPrice || !noPrice) {
+          noteSkip(debug, 'spread_missing_team_price_or_line');
+          continue;
         }
+        if (Math.abs(awayPoint + homePoint) > 0.001) {
+          noteSkip(debug, 'spread_points_not_opposing');
+          continue;
+        }
+
+        out.push({
+          id: `${ev.id}-${platform}-spread-${Math.abs(awayPoint)}`,
+          source: 'parlay',
+          platform,
+          bookTitle,
+          sport: sportShort(sport),
+          marketType: 'spread',
+          home,
+          away,
+          startTime,
+          line: Math.abs(awayPoint),
+          yesPrice,
+          noPrice,
+          sourceProof: {
+            YES: sideProof(proofBase(meta, ev, book, market), awayOut, `${away} ${awayPoint > 0 ? '+' : ''}${awayPoint}`, awayOut?.price ?? null),
+            NO: sideProof(proofBase(meta, ev, book, market), homeOut, `${home} ${homePoint > 0 ? '+' : ''}${homePoint}`, homeOut?.price ?? null)
+          },
+          favoredTeamName: away,
+          rawTitle: `Spread: ${away} (${awayPoint > 0 ? '+' : ''}${awayPoint})`,
+          noTitle: `Spread: ${home} (${homePoint > 0 ? '+' : ''}${homePoint})`,
+          spreadSides: {
+            YES: { team: away, point: awayPoint, rawPrice: awayOut.price ?? null },
+            NO: { team: home, point: homePoint, rawPrice: homeOut.price ?? null }
+          },
+          url: googleUrl(bookTitle, away, home)
+        });
       }
     }
   }

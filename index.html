@@ -980,6 +980,12 @@ const NEAR_ARB_BAND = 0.02;
 function fallbackSourceProof(m, outcome, price) {
   const title = outcome === 'YES' ? (m.rawTitle || m.noTitle) : (m.noTitle || m.rawTitle);
   return {
+    displayedBook: PLAT_LB[m.platform] || m.platform,
+    displayedGame: m.teams?.length ? m.teams.join(' vs ') : (m.rawTitle || ''),
+    displayedMarketType: m.marketType || null,
+    displayedSide: title || outcome,
+    displayedLine: m.line ?? null,
+    displayedOdds: probToAmerican(price),
     platform: m.platform,
     book: PLAT_LB[m.platform] || m.platform,
     sourceEndpoint: m.platform ? `/api/${m.platform}` : null,
@@ -991,8 +997,14 @@ function fallbackSourceProof(m, outcome, price) {
     rawOutcomeName: title || null,
     rawOutcomePrice: outcome === 'YES' ? (m.rawPrice ?? m.yesPrice ?? null) : (m.rawNoPrice ?? m.noPrice ?? null),
     rawOutcomePoint: m.line ?? null,
+    rawLastUpdate: m.lastUpdate || null,
+    normalizationFunctionUsed: `extract${(PLAT_LB[m.platform] || m.platform || 'unknown').replace(/\s+/g, '')}Structure`,
+    normalizedGameKey: m.gameKey || null,
+    normalizedMarketKey: [m.marketType || '', m.line ?? '', m.favoredTeam || '', m.player || '', m.statType || ''].join('|'),
     normalizedSide: outcome,
     normalizedAmerican: probToAmerican(price),
+    normalizedLine: m.line ?? null,
+    normalizedOdds: probToAmerican(price),
     normalizedProbability: price,
     rawCommenceTime: m.startTime || m.gameDate || null,
     displayedDate: m.gameDate || null,
@@ -1325,7 +1337,14 @@ function noteParlayDrop(debug, reason, market, detail = {}) {
 
 function enrichSourceProof(proof, market, side, gameDate, dedupeKey, matchGroupKey, fromCache = false) {
   if (!proof) return null;
+  const normalizedProbability = side === 'YES' ? market.yesPrice : market.noPrice;
   return {
+    displayedBook: PLAT_LB[market.platform] || market.platform,
+    displayedGame: `${market.away} @ ${market.home}`,
+    displayedMarketType: market.marketType,
+    displayedSide: proof.normalizedSide || side,
+    displayedLine: market.line ?? proof.rawOutcomePoint ?? null,
+    displayedOdds: probToAmerican(normalizedProbability),
     platform: market.platform,
     book: market.bookTitle || market.platform,
     sourceEndpoint: proof.sourceEndpoint || null,
@@ -1337,9 +1356,15 @@ function enrichSourceProof(proof, market, side, gameDate, dedupeKey, matchGroupK
     rawOutcomeName: proof.rawOutcomeName || null,
     rawOutcomePrice: proof.rawOutcomePrice ?? null,
     rawOutcomePoint: proof.rawOutcomePoint ?? null,
+    rawLastUpdate: proof.lastUpdate || null,
+    normalizationFunctionUsed: 'extractParlayStructure',
+    normalizedGameKey: market.gameKey,
+    normalizedMarketKey: [market.marketType, market.line ?? '', market.favoredTeam || '', market.player || '', market.statType || ''].join('|'),
     normalizedSide: proof.normalizedSide || side,
     normalizedAmerican: proof.normalizedAmerican ?? null,
-    normalizedProbability: side === 'YES' ? market.yesPrice : market.noPrice,
+    normalizedLine: market.line ?? proof.rawOutcomePoint ?? null,
+    normalizedOdds: probToAmerican(normalizedProbability),
+    normalizedProbability,
     rawCommenceTime: proof.rawCommenceTime || market.startTime || null,
     displayedDate: gameDate,
     lastUpdate: proof.lastUpdate || null,
@@ -1488,6 +1513,7 @@ function extractParlayStructure(m, debug = null) {
     marketType,
     line,
     favoredTeam,
+    spreadSides: m.spreadSides || null,
     player: m.player || null,
     statType: m.statType || null,
     gameDate: dateStr,
