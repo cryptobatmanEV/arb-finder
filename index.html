@@ -115,11 +115,13 @@
     .side-board-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
     .side-board-panel { border: 1px solid var(--border); border-radius: 8px; background: rgba(255,255,255,0.02); overflow: hidden; }
     .side-board-hdr { padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 0.68rem; color: var(--text); font-weight: 700; }
-    .side-board-row { display: grid; grid-template-columns: 92px 1fr auto auto; gap: 8px; align-items: center; padding: 7px 10px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.66rem; }
+    .side-board-row { display: grid; grid-template-columns: 92px 1fr auto 78px auto auto; gap: 8px; align-items: center; padding: 7px 10px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.66rem; }
     .side-board-row:last-child { border-bottom: 0; }
     .side-board-book { color: var(--text); font-weight: 700; }
     .side-board-bet { color: var(--dim); min-width: 0; overflow-wrap: anywhere; }
     .side-board-odds { color: var(--green); font-weight: 800; font-family: var(--mono); }
+    .side-board-stake { width: 78px; border: 1px solid var(--border-2); background: rgba(0,0,0,0.22); color: var(--green); border-radius: 6px; padding: 5px 7px; font-family: var(--mono); font-size: 0.66rem; }
+    .side-board-payout { color: var(--text); font-family: var(--mono); white-space: nowrap; }
     .side-board-tag { color: var(--dimmer); font-size: 0.58rem; text-transform: uppercase; letter-spacing: 0.06em; }
     .side-board-tag.main { color: var(--yellow); }
     .side-board-tag.better { color: var(--green); }
@@ -204,7 +206,7 @@
       .stat { min-width: 100px; }
       .side-board-grid { grid-template-columns: 1fr; }
       .side-board-row { grid-template-columns: 84px 1fr auto; }
-      .side-board-tag { display: none; }
+      .side-board-stake, .side-board-payout, .side-board-tag { grid-column: 2 / span 2; }
     }
   </style>
 </head>
@@ -739,6 +741,10 @@ function extractPolymarketStructure(m) {
   // Use depth-adjusted orderbook prices (confirmed accurate vs top-of-book)
   // clobYesBuy = weighted avg fill price for $50 bet on YES side
   // clobNoBuy  = weighted avg fill price for $50 bet on NO side (derived from YES bids)
+  // Prediction market probability p converts to American odds:
+  // p >= .50 => -(p / (1-p))*100, otherwise ((1-p)/p)*100.
+  const clobYesRaw = parseFloat(m.clobYesRawBuy || 0);
+  const clobNoRaw = parseFloat(m.clobNoRawBuy || 0);
   const clobYes = parseFloat(m.clobYesBuy || 0);
   const clobNo  = parseFloat(m.clobNoBuy  || 0);
   const bestAsk = parseFloat(m.bestAsk || 0);
@@ -749,8 +755,10 @@ function extractPolymarketStructure(m) {
 
   // Only use real prices — no fallback to outcomePrices (unreliable for NO side)
   // If clobYesBuy/clobNoBuy are null, the proxy already determined market isn't real
-  const yesPrice = clobYes > 0.01 ? clobYes : bestAsk > 0.01 ? bestAsk : 0;
-  const noPrice  = clobNo  > 0.01 ? clobNo  : bestBid > 0.01 ? (1 - bestBid) : 0;
+  const fallbackYes = parseFloat(fallback[0] || 0);
+  const fallbackNo = parseFloat(fallback[1] || 0);
+  const yesPrice = clobYesRaw > 0.01 ? clobYesRaw : bestAsk > 0.01 ? bestAsk : clobYes > 0.01 ? clobYes : fallbackYes;
+  const noPrice  = clobNoRaw  > 0.01 ? clobNoRaw  : clobNo > 0.01 ? clobNo : fallbackNo > 0.01 ? fallbackNo : bestBid > 0.01 ? (1 - bestBid) : 0;
 
   if (!yesPrice || yesPrice < 0.02 || yesPrice > 0.98) return null;
   // Reject markets where $50 is not fully fillable (too illiquid to arb)
@@ -764,6 +772,26 @@ function extractPolymarketStructure(m) {
     rawTitle: title,
     sport, gameKey, teams, marketType, line, player, statType, gameDate,
     yesPrice, noPrice,
+    rawPrice: yesPrice,
+    rawNoPrice: noPrice,
+    priceAudit: {
+      source: 'polymarket',
+      rawTitle: title,
+      yesFieldUsed: clobYesRaw > 0.01 ? 'clobYesRawBuy' : bestAsk > 0.01 ? 'bestAsk' : clobYes > 0.01 ? 'clobYesBuy_fee_adjusted' : 'outcomePrices[0]',
+      noFieldUsed: clobNoRaw > 0.01 ? 'clobNoRawBuy' : clobNo > 0.01 ? 'clobNoBuy_fee_adjusted' : fallbackNo > 0.01 ? 'outcomePrices[1]' : '1 - bestBid',
+      rawYesPrice: yesPrice,
+      rawNoPrice: noPrice,
+      clobYesRawBuy: m.clobYesRawBuy ?? null,
+      clobNoRawBuy: m.clobNoRawBuy ?? null,
+      clobYesBuyFeeAdjusted: m.clobYesBuy ?? null,
+      clobNoBuyFeeAdjusted: m.clobNoBuy ?? null,
+      bestAsk: m.bestAsk ?? null,
+      bestBid: m.bestBid ?? null,
+      outcomePrices: fallback,
+      lastTradedPrice: m.last_trade_price ?? m.lastTradePrice ?? null,
+      clobLive: !!m.clobLive,
+      warning: (!clobYesRaw && !bestAsk) || (!clobNoRaw && !clobNo && !fallbackNo) ? 'missing executable quote fallback used' : null
+    },
     url: gameKey ? `https://polymarket.com/sports/${sport}/${gameKey}` : 'https://polymarket.com',
   };
 }
@@ -853,9 +881,7 @@ function extractKalshiStructure(m) {
   const yBid = parseFloat(m.yes_bid_dollars) || 0;
   const nAsk = parseFloat(m.no_ask_dollars)  || 0;
   const nBid = parseFloat(m.no_bid_dollars)  || 0;
-  const yesRaw = yAsk > 0 ? yAsk : yBid;
-  const noRaw  = nAsk > 0 ? nAsk : nBid;
-  if (!yesRaw || yesRaw < 0.02 || yesRaw > 0.98) return null;
+  if (!yAsk || yAsk < 0.02 || yAsk > 0.98) return null;
   // Confirmed from live testing: Kalshi game markets (moneyline/spread/total)
   // always have executable NO. Player props frequently do NOT have NO available
   // despite returning a no_ask price. Filter out all props until we have
@@ -870,8 +896,52 @@ function extractKalshiStructure(m) {
   // Apply confirmed Kalshi quadratic fee: fee = 0.07 * p * (1-p)
   // Verified: at 53c YES, fee=1.74c, true_cost=54.74c (matches Kalshi's actual payout)
   const kFee = (p) => 0.07 * p * (1 - p);
-  const yesFinal = yesRaw + kFee(yesRaw);
-  const noFinal  = noRaw  + kFee(noRaw);
+  const yesFinal = yAsk;
+  const noFinal  = nAsk;
+  const teamLabel = (abbr) => PM_ABBR[abbr] || abbr || '';
+  const otherTeam = winnerTeam && Array.isArray(teams) ? teams.find(t => t !== winnerTeam) : null;
+  const spreadTeam = marketType === 'spread' ? extractKalshiFavoredTeam(title) : null;
+  const spreadOther = spreadTeam && Array.isArray(teams) ? teams.find(t => t !== spreadTeam) : null;
+  const yesSideLabel = marketType === 'moneyline' && winnerTeam ? teamLabel(winnerTeam)
+    : marketType === 'total' && line != null ? `Over ${line}`
+    : marketType === 'spread' && spreadTeam && line != null ? `${teamLabel(spreadTeam)} -${line}`
+    : humanOutcome(title, 'YES');
+  const noSideLabel = marketType === 'moneyline' && otherTeam ? teamLabel(otherTeam)
+    : marketType === 'total' && line != null ? `Under ${line}`
+    : marketType === 'spread' && spreadOther && line != null ? `${teamLabel(spreadOther)} +${line}`
+    : humanOutcome(title, 'NO');
+  const kalshiProof = (side, displayedSide, price) => ({
+    displayedBook: 'Kalshi',
+    displayedGame: teams?.length ? teams.map(teamLabel).join(' vs ') : title,
+    displayedMarketType: marketType,
+    displayedSide,
+    displayedLine: line ?? null,
+    displayedOdds: probToAmerican(price),
+    trustStatus: 'trusted_live',
+    platform: 'kalshi',
+    book: 'Kalshi',
+    sourceEndpoint: '/api/kalshi',
+    sourceRequest: '/api/kalshi',
+    rawEventId: ticker,
+    rawBookmakerKey: 'kalshi',
+    rawBookmakerTitle: 'Kalshi',
+    rawMarketKey: series,
+    normalizedMarketType: marketType,
+    rawOutcomeName: side,
+    rawOutcomePrice: price,
+    rawOutcomePoint: line ?? null,
+    normalizationFunctionUsed: 'extractKalshiStructure',
+    normalizedGameKey: gameKey,
+    normalizedMarketKey: [marketType || '', line ?? '', spreadTeam || '', player || '', statType || ''].join('|'),
+    normalizedSide: displayedSide,
+    normalizedAmerican: probToAmerican(price),
+    normalizedLine: line ?? null,
+    normalizedOdds: probToAmerican(price),
+    normalizedProbability: price,
+    rawCommenceTime: gameDate || null,
+    displayedDate: gameDate || null,
+    cacheStatus: 'frontend-normalized'
+  });
 
   return {
     id: 'ka_' + ticker,
@@ -879,7 +949,27 @@ function extractKalshiStructure(m) {
     rawTitle: title,
     sport, gameKey, teams: teams || [], marketType, line,
     player, statType, gameDate: gameDate || null, isFutures: !!isFutures, winnerTeam,
-    yesPrice: yesFinal, noPrice: noFinal || (1 - yesFinal),
+    yesPrice: yesFinal, noPrice: noFinal,
+    rawPrice: yesFinal,
+    rawNoPrice: noFinal,
+    priceAudit: {
+      source: 'kalshi',
+      rawTitle: title,
+      yesFieldUsed: 'yes_ask_dollars',
+      noFieldUsed: 'no_ask_dollars',
+      rawYesPrice: yAsk,
+      rawNoPrice: nAsk,
+      yesBid: yBid,
+      noBid: nBid,
+      lastTradedPrice: m.last_price ?? m.lastPrice ?? null,
+      yesFeeAdjustedCost: yAsk > 0 ? yAsk + kFee(yAsk) : null,
+      noFeeAdjustedCost: nAsk > 0 ? nAsk + kFee(nAsk) : null,
+      warning: (!yAsk || !nAsk) ? 'missing executable ask; row skipped' : null
+    },
+    sourceProof: {
+      YES: kalshiProof('YES', yesSideLabel, yesFinal),
+      NO: kalshiProof('NO', noSideLabel, noFinal)
+    },
     url: `https://kalshi.com/markets/${ticker}`,
   };
 }
@@ -1000,7 +1090,7 @@ function fallbackSourceProof(m, outcome, price) {
     displayedBook: PLAT_LB[m.platform] || m.platform,
     displayedGame: m.teams?.length ? m.teams.join(' vs ') : (m.rawTitle || ''),
     displayedMarketType: m.marketType || null,
-    displayedSide: title || outcome,
+    displayedSide: humanOutcome(title, outcome),
     displayedLine: m.line ?? null,
     displayedOdds: probToAmerican(price),
     trustStatus: m.trustStatus || 'trusted_live',
@@ -1034,7 +1124,8 @@ function fallbackSourceProof(m, outcome, price) {
     dedupeKey: m.dedupeKey || null,
     matchGroupKey: m.matchGroupKey || m.gameKey || null,
     rawHomeTeam: m.home || null,
-    rawAwayTeam: m.away || null
+    rawAwayTeam: m.away || null,
+    priceAudit: m.priceAudit || null
   };
 }
 
@@ -1181,6 +1272,10 @@ function calcArb(mA, mB) {
       rawTitle: best.oA === 'YES' ? (mA.rawTitle || mA.noTitle) : (mA.noTitle || mA.rawTitle),
       rawPrice: best.oA === 'YES' ? mA.rawPrice : mA.rawNoPrice,
       exchangeDebug: mA.exchangeDebug || null,
+      sport: mA.sport,
+      gameKey: mA.gameKey,
+      marketType: mA.marketType,
+      line: mA.line ?? null,
       sourceProof: selectedSourceProof(mA, best.oA, best.pA),
     },
     legB: {
@@ -1188,6 +1283,10 @@ function calcArb(mA, mB) {
       rawTitle: best.oB === 'YES' ? (mB.rawTitle || mB.noTitle) : (mB.noTitle || mB.rawTitle),
       rawPrice: best.oB === 'YES' ? mB.rawPrice : mB.rawNoPrice,
       exchangeDebug: mB.exchangeDebug || null,
+      sport: mB.sport,
+      gameKey: mB.gameKey,
+      marketType: mB.marketType,
+      line: mB.line ?? null,
       sourceProof: selectedSourceProof(mB, best.oB, best.pB),
     },
     matchGroupKey,
@@ -1772,7 +1871,31 @@ function bothPlatformsInSet(opp, set) {
 }
 
 function legSideKey(leg) {
-  return displayBetLabel(leg).toLowerCase().replace(/\s+/g, ' ').trim();
+  return canonicalSideIdentity(leg);
+}
+
+function canonicalSideIdentity(leg) {
+  const label = displayBetLabel(leg).toLowerCase().replace(/\s+/g, ' ').trim();
+  const marketType = leg?.sourceProof?.normalizedMarketType || leg?.marketType || '';
+  const sport = leg?.sport || String(leg?.sourceProof?.normalizedGameKey || '').split('-')[0] || '';
+  const line = leg?.sourceProof?.normalizedLine ?? leg?.line ?? '';
+
+  if (marketType === 'moneyline') {
+    const teamText = label.replace(/\s+moneyline$/i, '').trim();
+    const abbr = teamNameToAbbr(teamText, sport);
+    return `moneyline:${abbr || teamText}`;
+  }
+  if (marketType === 'spread') {
+    const side = label.replace(/\s+[+-]?[\d.]+$/i, '').trim();
+    const sideLine = (label.match(/([+-]?[\d.]+)$/) || [null, line])[1];
+    const abbr = teamNameToAbbr(side, sport);
+    return `spread:${abbr || side}:${Number(sideLine)}`;
+  }
+  if (marketType === 'total') {
+    const ou = /^over\b/i.test(label) ? 'over' : /^under\b/i.test(label) ? 'under' : label;
+    return `total:${ou}:${Number(line)}`;
+  }
+  return label;
 }
 
 function groupedOppKey(opp) {
@@ -1817,21 +1940,25 @@ function marketSideLeg(market, outcome) {
     price,
     rawTitle: outcome === 'YES' ? (market.rawTitle || market.noTitle) : (market.noTitle || market.rawTitle),
     sourceProof: proof,
+    sport: market.sport,
+    gameKey: market.gameKey,
     marketType: market.marketType,
     line: market.line ?? null
   };
 }
 
 function collectSideBooksFromMarkets(markets, primaryLeg) {
-  const outcome = primaryLeg.outcome;
+  const primarySide = canonicalSideIdentity(primaryLeg);
   const byPlatform = {};
   (markets || []).forEach(market => {
-    const leg = marketSideLeg(market, outcome);
-    if (!leg) return;
-    const current = byPlatform[leg.platform];
-    if (!current || leg.price < current.price) {
-      byPlatform[leg.platform] = leg;
-    }
+    ['YES', 'NO'].forEach(outcome => {
+      const leg = marketSideLeg(market, outcome);
+      if (!leg || canonicalSideIdentity(leg) !== primarySide) return;
+      const current = byPlatform[leg.platform];
+      if (!current || leg.price < current.price) {
+        byPlatform[leg.platform] = leg;
+      }
+    });
   });
   return Object.values(byPlatform).sort((a, b) => a.price - b.price);
 }
@@ -1952,11 +2079,14 @@ function MatchValidationDebug({ validation }) {
 }
 
 function cleanTeamLabel(label) {
-  return String(label || '')
+  const cleaned = String(label || '')
     .replace(/\s+wins\??$/i, '')
     .replace(/\s+winner\??$/i, '')
     .replace(/\?+$/g, '')
     .trim();
+  return cleaned.replace(/\b([a-z])/g, ch => ch.toUpperCase())
+    .replace(/\bLa\b/g, 'LA')
+    .replace(/\bDc\b/g, 'DC');
 }
 
 function displayBetLabel(leg) {
@@ -1989,6 +2119,30 @@ function displayBetLabel(leg) {
   return cleanTeamLabel(side) || humanOutcome(leg?.rawTitle, leg?.outcome);
 }
 
+function SideBoardRow({ book }) {
+  const [stake, setStake] = React.useState('');
+  const stakeNum = parseFloat(stake) || 0;
+  const payout = stakeNum > 0 && book.price ? stakeNum / book.price : 0;
+  return (
+    <div className="side-board-row">
+      <span className="side-board-book">{PLAT_LB[book.platform] || book.platform}</span>
+      <span className="side-board-bet">{book.label}</span>
+      <span className="side-board-odds">{probToAmerican(book.price)}</span>
+      <input
+        className="side-board-stake"
+        type="number"
+        min="0"
+        placeholder="$0"
+        value={stake}
+        onChange={e => setStake(e.target.value)}
+        aria-label={`Stake for ${PLAT_LB[book.platform] || book.platform} ${book.label}`}
+      />
+      <span className="side-board-payout">{stakeNum > 0 ? fmtUSD(payout) : 'payout'}</span>
+      <span className={`side-board-tag ${book.relation}`}>{book.relation}</span>
+    </div>
+  );
+}
+
 function AlsoAvailable({ opp }) {
   const [open, setOpen] = React.useState(false);
   const boards = opp.sideBoards || {};
@@ -2016,12 +2170,7 @@ function AlsoAvailable({ opp }) {
             <div className="side-board-panel" key={row.label}>
               <div className="side-board-hdr">{row.label}</div>
               {row.books.map(book => (
-                <div className="side-board-row" key={`${row.label}-${book.platform}`}>
-                  <span className="side-board-book">{PLAT_LB[book.platform] || book.platform}</span>
-                  <span className="side-board-bet">{book.label}</span>
-                  <span className="side-board-odds">{probToAmerican(book.price)}</span>
-                  <span className={`side-board-tag ${book.relation}`}>{book.relation}</span>
-                </div>
+                <SideBoardRow book={book} key={`${row.label}-${book.platform}`} />
               ))}
             </div>
           ))}

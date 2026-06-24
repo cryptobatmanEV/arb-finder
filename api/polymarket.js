@@ -207,6 +207,7 @@ export default async function handler(req, res) {
       let ids = m.clobTokenIds;
       if (typeof ids === 'string') { try { ids = JSON.parse(ids); } catch { ids = []; } }
       if (Array.isArray(ids) && ids[0]) tokenIdToMarket[ids[0]] = i;
+      if (Array.isArray(ids) && ids[1]) tokenIdToMarket[ids[1]] = i;
     });
 
     // 4. Batch-fetch CLOB books (10 concurrent, 50ms between batches)
@@ -235,8 +236,10 @@ export default async function handler(req, res) {
       let ids = m.clobTokenIds;
       if (typeof ids === 'string') { try { ids = JSON.parse(ids); } catch { ids = []; } }
       const yesTokenId = Array.isArray(ids) ? ids[0] : null;
-      const clob = yesTokenId ? clobData[yesTokenId] : null;
-      const clobLive = !!clob;
+      const noTokenId = Array.isArray(ids) ? ids[1] : null;
+      const yesClob = yesTokenId ? clobData[yesTokenId] : null;
+      const noClob = noTokenId ? clobData[noTokenId] : null;
+      const clobLive = !!(yesClob || noClob);
 
       const fallback = m.outcomePrices
         ? (Array.isArray(m.outcomePrices) ? m.outcomePrices : JSON.parse(m.outcomePrices||'[]'))
@@ -245,25 +248,26 @@ export default async function handler(req, res) {
       // YES side: simulate fill across the ask ladder.
       // simulateFill returns the volume-weighted avg raw price (pre-fee).
       // Falls back to Gamma bestAsk if CLOB data unavailable.
-      const yesSimAvg = clob?.asks ? simulateFill(clob.asks, REFERENCE_STAKE) : null;
+      const yesSimAvg = yesClob?.asks ? simulateFill(yesClob.asks, REFERENCE_STAKE) : null;
       const yesGamma  = parseFloat(m.bestAsk || fallback[0] || 0);
       const yesBase   = (yesSimAvg && yesSimAvg > 0.01) ? yesSimAvg : (yesGamma > 0.01 ? yesGamma : 0);
 
       // NO side: buying NO = the other side of YES bids.
       // Each YES bid at p means NO can be filled at (1-p).
       // Convert YES bid ladder → synthetic NO ask ladder, then simulate fill.
-      let noBase = 0;
-      if (clob?.bids && clob.bids.length > 0) {
-        const noAsks = clob.bids
+      const noSimAvg = noClob?.asks ? simulateFill(noClob.asks, REFERENCE_STAKE) : null;
+      let noBase = (noSimAvg && noSimAvg > 0.01) ? noSimAvg : 0;
+      if (!noBase && yesClob?.bids && yesClob.bids.length > 0) {
+        const noAsks = yesClob.bids
           .map(b => ({ price: 1 - b.price, size: b.size }))
           .sort((a, b) => a.price - b.price);
-        const noSimAvg = simulateFill(noAsks, REFERENCE_STAKE);
-        noBase = (noSimAvg && noSimAvg > 0.01) ? noSimAvg : 0;
+        const syntheticNoSimAvg = simulateFill(noAsks, REFERENCE_STAKE);
+        noBase = (syntheticNoSimAvg && syntheticNoSimAvg > 0.01) ? syntheticNoSimAvg : 0;
       }
       if (!noBase) {
         // Gamma fallback: bestBid → NO price
-        const gammaNoBase = parseFloat(m.bestBid || fallback[1] || 0);
-        noBase = gammaNoBase > 0.01 ? (1 - gammaNoBase) : 0;
+        const gammaNoBase = parseFloat(fallback[1] || 0);
+        noBase = gammaNoBase > 0.01 ? gammaNoBase : 0;
       }
 
       // feesEnabled from Gamma API: pre-Feb-18 markets and geopolitics are fee-free.
@@ -275,10 +279,13 @@ export default async function handler(req, res) {
         ...m,
         clobYesBuy,
         clobNoBuy,
+        clobYesRawBuy: yesBase > 0.01 ? parseFloat(yesBase.toFixed(4)) : null,
+        clobNoRawBuy: noBase > 0.01 ? parseFloat(noBase.toFixed(4)) : null,
         yesFullyFillable: true,
         clobLive,        // true = prices from live CLOB, false = Gamma cache
         hasFee,          // true = sports fee applied, false = fee-free market
         clobYesTokenId: yesTokenId || null,
+        clobNoTokenId: noTokenId || null,
       };
     });
 

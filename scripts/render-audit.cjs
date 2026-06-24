@@ -87,6 +87,27 @@ function displayBetLabel(leg) {
   return cleanLabel(side);
 }
 
+function canonicalSideIdentity(leg) {
+  const label = displayBetLabel(leg).toLowerCase().replace(/\s+/g, ' ').trim();
+  const marketType = leg.sourceProof?.normalizedMarketType || leg.marketType || '';
+  const sport = leg.sport || String(leg.sourceProof?.normalizedGameKey || '').split('-')[0] || '';
+  const line = leg.sourceProof?.normalizedLine ?? leg.line ?? '';
+  if (marketType === 'moneyline') {
+    const teamText = label.replace(/\s+moneyline$/i, '').trim();
+    return `moneyline:${teamAbbr(teamText) || teamText}`;
+  }
+  if (marketType === 'spread') {
+    const side = label.replace(/\s+[+-]?[\d.]+$/i, '').trim();
+    const sideLine = (label.match(/([+-]?[\d.]+)$/) || [null, line])[1];
+    return `spread:${teamAbbr(side) || side}:${Number(sideLine)}`;
+  }
+  if (marketType === 'total') {
+    const ou = /^over\b/i.test(label) ? 'over' : /^under\b/i.test(label) ? 'under' : label;
+    return `total:${ou}:${Number(line)}`;
+  }
+  return `${sport}:${label}`;
+}
+
 function proofMarketFamily(m) {
   return m.sourceProof?.YES?.normalizedMarketType
     || m.sourceProof?.NO?.normalizedMarketType
@@ -134,6 +155,8 @@ function sideLeg(m, outcome) {
     outcome,
     price,
     rawTitle: outcome === 'YES' ? (m.rawTitle || m.noTitle) : (m.noTitle || m.rawTitle),
+    sport: m.sport,
+    gameKey: m.gameKey,
     marketType: m.marketType,
     line: m.line ?? null,
     sourceProof: sourceProof(m, outcome, price)
@@ -184,12 +207,15 @@ function marketMatchesOpp(m, opp) {
 }
 
 function collectBoard(markets, opp, leg) {
+  const primarySide = canonicalSideIdentity(leg);
   const byPlatform = {};
   markets.filter(m => marketMatchesOpp(m, opp)).forEach(m => {
-    const side = sideLeg(m, leg.outcome);
-    if (!side) return;
-    const current = byPlatform[side.platform];
-    if (!current || side.price < current.price) byPlatform[side.platform] = side;
+    ['YES', 'NO'].forEach(outcome => {
+      const side = sideLeg(m, outcome);
+      if (!side || canonicalSideIdentity(side) !== primarySide) return;
+      const current = byPlatform[side.platform];
+      if (!current || side.price < current.price) byPlatform[side.platform] = side;
+    });
   });
   return Object.values(byPlatform)
     .sort((a, b) => a.price - b.price)
@@ -204,7 +230,7 @@ function collectBoard(markets, opp, leg) {
 function groupKey(opp) {
   const gameKey = opp.matchValidation?.legA?.gameKey || opp.matchValidation?.legB?.gameKey || '';
   const line = opp.matchValidation?.legA?.line ?? opp.matchValidation?.legB?.line ?? '';
-  const sides = [displayBetLabel(opp.legA), displayBetLabel(opp.legB)].sort().join(' vs ');
+  const sides = [canonicalSideIdentity(opp.legA), canonicalSideIdentity(opp.legB)].sort().join(' vs ');
   return [gameKey, opp.sport, opp.marketType, line, sides].join('|').toLowerCase();
 }
 
