@@ -229,8 +229,8 @@ const FILTERS  = ['all','mlb','nba','nfl','nhl','crypto','other'];
 const FILTER_LB = { all:'All', mlb:'MLB', nba:'NBA', nfl:'NFL', nhl:'NHL', crypto:'Crypto', other:'Other' };
 const SOURCE_FILTERS = ['all','core','sportsbook','exchange'];
 const SOURCE_FILTER_LB = { all:'All', core:'Core only', sportsbook:'Sportsbook only', exchange:'Exchange only' };
-const MARKET_FILTERS = ['all','main','player_props','moneyline','spread','total','prop'];
-const MARKET_FILTER_LB = { all:'All', main:'Main Lines', player_props:'Player Props', moneyline:'Moneyline', spread:'Spread', total:'Total', prop:'Props' };
+const MARKET_FILTERS = ['all','main','moneyline','spread','total'];
+const MARKET_FILTER_LB = { all:'All', main:'Main Lines', moneyline:'Moneyline', spread:'Spread', total:'Total' };
 
 // ─── TEAM NORMALIZATION ───────────────────────────────────────────────────────
 const TEAM_MAP = {
@@ -891,16 +891,6 @@ function matchMarkets(structured) {
           if (!mA.gameKey || !mB.gameKey) return;
           if (mA.gameKey !== mB.gameKey) return;
 
-          // If both rows have raw Parlay event proof, require the exact raw event/time too.
-          // Friendly game keys are useful across providers, but raw proof prevents
-          // same-teams/different-date sportsbook rows from being mixed together.
-          const evA = mA.sourceProof?.YES?.rawEventId || mA.sourceProof?.NO?.rawEventId || null;
-          const evB = mB.sourceProof?.YES?.rawEventId || mB.sourceProof?.NO?.rawEventId || null;
-          if (evA && evB && evA !== evB) return;
-          const startA = mA.sourceProof?.YES?.rawCommenceTime || mA.sourceProof?.NO?.rawCommenceTime || null;
-          const startB = mB.sourceProof?.YES?.rawCommenceTime || mB.sourceProof?.NO?.rawCommenceTime || null;
-          if (startA && startB && startA !== startB) return;
-
           // RULE 3: Exact same marketType
           if (mA.marketType !== mB.marketType) return;
           if (mA.marketType === 'other') return;
@@ -917,11 +907,11 @@ function matchMarkets(structured) {
             if (ka.winnerTeam && awayTeam && ka.winnerTeam !== awayTeam) return;
           }
 
-          // RULE 4: For spreads - lines must match exactly AND
+          // RULE 4: For spreads - lines must match within 0.5 AND
           //         both markets must reference the SAME team covering
           if (mA.marketType === 'spread') {
             if (mA.line === null || mB.line === null) return;
-            if (Math.abs(mA.line - mB.line) > 0.0) return;
+            if (Math.abs(mA.line - mB.line) > 0.5) return;
             // Extract favored team from both titles using confirmed lookup
             const favA = mA.platform === 'kalshi'
               ? extractKalshiFavoredTeam(mA.rawTitle)
@@ -947,7 +937,7 @@ function matchMarkets(structured) {
             if (mA.statType !== mB.statType) return;
             if (!playerMatch(mA.player, mB.player)) return;
             if (mA.line === null || mB.line === null) return;
-            if (Math.abs(mA.line - mB.line) > 0.0) return;
+            if (Math.abs(mA.line - mB.line) > 0.25) return;
           }
 
           const key = [mA.id, mB.id].sort().join('||');
@@ -1447,7 +1437,6 @@ function extractParlayStructure(m, debug = null) {
   const gameKey = `${sport}-${awayAbbr}-${homeAbbr}-${dateStr}`;
   const matchGroupKey = [
     sport,
-    m.id || m.sourceProof?.YES?.rawEventId || '',
     startTime,
     awayAbbr,
     homeAbbr,
@@ -1863,8 +1852,6 @@ function ArbCard({ opp }) {
         <ArbLeg leg={legB} stake={stakeB} onStakeChange={handleStakeB} label="LEG 2" />
       </div>
 
-      <AlsoAvailable opp={opp} />
-
       {/* Quick stake buttons */}
       <div className="oj-quick-row">
         <span className="oj-calc-lbl">Quick set total:</span>
@@ -2033,7 +2020,6 @@ function App() {
   const [filter,   setFilter]   = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [marketFilter, setMarketFilter] = useState('all');
-  const [includeProps, setIncludeProps] = useState(false);
   const [enabledBooks, setEnabledBooks] = useState(() => {
     try { return JSON.parse(localStorage.getItem('enabledBooks') || 'null') || ALL_BOOK_FILTERS; }
     catch (_) { return ALL_BOOK_FILTERS; }
@@ -2145,7 +2131,7 @@ function App() {
     setParlayLoading(true);
     setStatus(prev => ({ ...prev, parlay:'loading' }));
     try {
-      const d = await fetchParlay({ forceFresh: true, includeProps });
+      const d = await fetchParlay({ forceFresh: true });
       if (d.length === 0 && (parlayRef.current || []).length > 0) {
         throw new Error('Sportsbook refresh returned zero markets; keeping previous successful load');
       }
@@ -2165,7 +2151,7 @@ function App() {
     } finally {
       setParlayLoading(false);
     }
-  }, [markets, recalc, includeProps]);
+  }, [markets, recalc]);
 
   const refreshOdds = useCallback(async () => {
     if (loading || parlayLoading || refreshCooldown) return;
@@ -2198,15 +2184,14 @@ function App() {
   };
   const visibleByMarket = (o) => {
     if (marketFilter === 'main') return ['moneyline','spread','total'].includes(o.marketType);
-    if (marketFilter === 'player_props') return o.marketType === 'prop';
-    if (['moneyline','spread','total','prop'].includes(marketFilter)) return o.marketType === marketFilter;
+    if (['moneyline','spread','total'].includes(marketFilter)) return o.marketType === marketFilter;
     return true;
   };
   const visibleOpp = (o) => visibleByBooks(o) && visibleBySource(o) && visibleByMarket(o);
   const fArbs = (filter === 'all' ? arbs : arbs.filter(a => a.sport === filter)).filter(visibleOpp);
   const fNear = (filter === 'all' ? near : near.filter(a => a.sport === filter)).filter(visibleOpp);
-  const displayArbs = groupOpportunities(fArbs);
-  const displayNear = groupOpportunities(fNear);
+  const displayArbs = fArbs;
+  const displayNear = fNear;
   const shownOpps = [...displayArbs, ...displayNear];
   const shownSportsbookCards = shownOpps.filter(o => involvesPlatformSet(o, sportsbookSet)).length;
   const shownPairCounts = topEntries(countOppsByPlatform(shownOpps), 20);
@@ -2291,9 +2276,6 @@ function App() {
             {SOURCE_FILTER_LB[f]}
           </button>
         ))}
-        <button className={`fbtn${includeProps?' active':''}`} onClick={() => setIncludeProps(v => !v)}>
-          {includeProps ? 'Main Lines + Props' : 'Main Lines'}
-        </button>
       </div>
 
       <div className="filters" style={{marginTop:'-10px'}}>
@@ -2357,7 +2339,6 @@ function App() {
           <div className="sec-hdr">
             Live Arbitrage Opportunities
             {displayArbs.length > 0 && <span className="sec-count">{displayArbs.length}</span>}
-            {displayArbs.length > 0 && fArbs.length > displayArbs.length && <span className="sec-count">{fArbs.length} pairs</span>}
           </div>
 
           {displayArbs.length > 0
