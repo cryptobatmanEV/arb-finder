@@ -154,6 +154,44 @@ function implied(price) {
   return n > 0 ? 100 / (n + 100) : Math.abs(n) / (Math.abs(n) + 100);
 }
 
+function requestPath(endpoint, params = {}) {
+  const qs = new URLSearchParams();
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value != null && value !== '') qs.set(key, value);
+  });
+  const query = qs.toString();
+  return `/v1${endpoint}${query ? `?${query}` : ''}`;
+}
+
+function proofBase(meta, ev, book, market) {
+  return {
+    sourceEndpoint: meta?.endpoint || null,
+    sourceRequest: meta?.requestPath || null,
+    rawEventId: ev?.id || ev?.event_id || ev?.key || null,
+    rawBookmakerKey: book?.key || null,
+    rawBookmakerTitle: book?.title || book?.key || null,
+    rawMarketKey: market?.key || null,
+    rawCommenceTime: ev?.commence_time || null,
+    displayedDate: String(ev?.commence_time || '').slice(0, 10) || null,
+    lastUpdate: book?.last_update || market?.last_update || null,
+    fetchTimestamp: meta?.fetchTimestamp || null,
+    cacheStatus: 'fresh',
+    rawHomeTeam: ev?.home_team || null,
+    rawAwayTeam: ev?.away_team || null
+  };
+}
+
+function sideProof(base, outcome, normalizedSide, normalizedAmerican) {
+  return {
+    ...base,
+    rawOutcomeName: outcome?.name || null,
+    rawOutcomePrice: outcome?.price ?? null,
+    rawOutcomePoint: outcome?.point ?? null,
+    normalizedSide,
+    normalizedAmerican
+  };
+}
+
 function americanFromProbability(price) {
   const p = Number(price);
   if (!Number.isFinite(p) || p <= 0 || p >= 1) return null;
@@ -363,7 +401,7 @@ function summarizeEvents(events, predicate = () => true) {
   };
 }
 
-function normalizeEvent(ev, sport, debug) {
+function normalizeEvent(ev, sport, debug, meta = {}) {
   const out = [];
   const home = ev.home_team;
   const away = ev.away_team;
@@ -418,6 +456,10 @@ function normalizeEvent(ev, sport, debug) {
           startTime,
           yesPrice,
           noPrice,
+          sourceProof: {
+            YES: sideProof(proofBase(meta, ev, book, market), awayOut, `${away} wins`, awayOut?.price ?? null),
+            NO: sideProof(proofBase(meta, ev, book, market), homeOut, `${home} wins`, homeOut?.price ?? null)
+          },
           rawTitle: `${away} vs ${home}`,
           noTitle: `${away} vs ${home}`,
           url: googleUrl(bookTitle, away, home)
@@ -450,6 +492,10 @@ function normalizeEvent(ev, sport, debug) {
           line: Number(point),
           yesPrice,
           noPrice,
+          sourceProof: {
+            YES: sideProof(proofBase(meta, ev, book, market), over, `Over ${point}`, over?.price ?? null),
+            NO: sideProof(proofBase(meta, ev, book, market), under, `Under ${point}`, under?.price ?? null)
+          },
           rawTitle: `${away} vs ${home}: O/U ${point}`,
           noTitle: `${away} vs ${home}: O/U ${point}`,
           url: googleUrl(bookTitle, away, home)
@@ -488,6 +534,10 @@ function normalizeEvent(ev, sport, debug) {
             line: Math.abs(Number(point)),
             yesPrice,
             noPrice,
+            sourceProof: {
+              YES: sideProof(proofBase(meta, ev, book, market), side, `${team} ${point}`, side?.price ?? null),
+              NO: sideProof(proofBase(meta, ev, book, market), other, `${other?.name || 'opponent'} ${other?.point ?? ''}`, other?.price ?? null)
+            },
             favoredTeamName: team,
             rawTitle: `Spread: ${team} (${Number(point) > 0 ? '+' : ''}${point})`,
             noTitle: `Spread: ${team} (${Number(point) > 0 ? '+' : ''}${point})`,
@@ -501,7 +551,7 @@ function normalizeEvent(ev, sport, debug) {
   return out;
 }
 
-function normalizeExchangeMarket(exchangeKey, m, sport, debug) {
+function normalizeExchangeMarket(exchangeKey, m, sport, debug, meta = {}) {
   const home = m.home_team;
   const away = m.away_team;
   const startTime = m.commence_time;
@@ -551,6 +601,48 @@ function normalizeExchangeMarket(exchangeKey, m, sport, debug) {
     noPrice: underPrice,
     rawYesPrice: overPrice,
     rawNoPrice: underPrice,
+    sourceProof: {
+      YES: {
+        sourceEndpoint: meta?.endpoint || null,
+        sourceRequest: meta?.requestPath || null,
+        rawEventId: m.event_id || m.id || m.key || null,
+        rawBookmakerKey: platform,
+        rawBookmakerTitle: bookTitle,
+        rawMarketKey: m.market_key || null,
+        rawOutcomeName: 'Over',
+        rawOutcomePrice: m.over_price ?? null,
+        rawOutcomePoint: line,
+        normalizedSide: `Over ${line}`,
+        normalizedAmerican: americanFromProbability(overPrice),
+        rawCommenceTime: startTime,
+        displayedDate: String(startTime || '').slice(0, 10),
+        lastUpdate: m.last_update || null,
+        fetchTimestamp: meta?.fetchTimestamp || null,
+        cacheStatus: 'fresh',
+        rawHomeTeam: home,
+        rawAwayTeam: away
+      },
+      NO: {
+        sourceEndpoint: meta?.endpoint || null,
+        sourceRequest: meta?.requestPath || null,
+        rawEventId: m.event_id || m.id || m.key || null,
+        rawBookmakerKey: platform,
+        rawBookmakerTitle: bookTitle,
+        rawMarketKey: m.market_key || null,
+        rawOutcomeName: 'Under',
+        rawOutcomePrice: m.under_price ?? null,
+        rawOutcomePoint: line,
+        normalizedSide: `Under ${line}`,
+        normalizedAmerican: americanFromProbability(underPrice),
+        rawCommenceTime: startTime,
+        displayedDate: String(startTime || '').slice(0, 10),
+        lastUpdate: m.last_update || null,
+        fetchTimestamp: meta?.fetchTimestamp || null,
+        cacheStatus: 'fresh',
+        rawHomeTeam: home,
+        rawAwayTeam: away
+      }
+    },
     rawOverPrice: m.over_price ?? null,
     rawUnderPrice: m.under_price ?? null,
     overAmerican: americanFromProbability(overPrice),
@@ -565,7 +657,7 @@ function normalizeExchangeMarket(exchangeKey, m, sport, debug) {
   };
 }
 
-function normalizePropRow(row, sport, debug) {
+function normalizePropRow(row, sport, debug, meta = {}) {
   const platform = normalizeBookKey(row.bookmaker || row.bookmaker_key || row.bookmakerKey);
   const bookTitle = row.bookmaker_title || row.bookmaker || platform;
   const marketKey = String(row.market_key || '').toLowerCase();
@@ -619,6 +711,48 @@ function normalizePropRow(row, sport, debug) {
     statType: marketKey,
     yesPrice,
     noPrice,
+    sourceProof: {
+      YES: {
+        sourceEndpoint: meta?.endpoint || null,
+        sourceRequest: meta?.requestPath || null,
+        rawEventId: row.event_id || row.id || row.key || null,
+        rawBookmakerKey: platform,
+        rawBookmakerTitle: bookTitle,
+        rawMarketKey: marketKey,
+        rawOutcomeName: 'Over',
+        rawOutcomePrice: row.over_price ?? null,
+        rawOutcomePoint: line,
+        normalizedSide: `${player} over ${line} ${marketKey}`,
+        normalizedAmerican: row.over_price ?? null,
+        rawCommenceTime: startTime,
+        displayedDate: String(startTime || '').slice(0, 10),
+        lastUpdate: row.last_update || null,
+        fetchTimestamp: meta?.fetchTimestamp || null,
+        cacheStatus: 'fresh',
+        rawHomeTeam: home,
+        rawAwayTeam: away
+      },
+      NO: {
+        sourceEndpoint: meta?.endpoint || null,
+        sourceRequest: meta?.requestPath || null,
+        rawEventId: row.event_id || row.id || row.key || null,
+        rawBookmakerKey: platform,
+        rawBookmakerTitle: bookTitle,
+        rawMarketKey: marketKey,
+        rawOutcomeName: 'Under',
+        rawOutcomePrice: row.under_price ?? null,
+        rawOutcomePoint: line,
+        normalizedSide: `${player} under ${line} ${marketKey}`,
+        normalizedAmerican: row.under_price ?? null,
+        rawCommenceTime: startTime,
+        displayedDate: String(startTime || '').slice(0, 10),
+        lastUpdate: row.last_update || null,
+        fetchTimestamp: meta?.fetchTimestamp || null,
+        cacheStatus: 'fresh',
+        rawHomeTeam: home,
+        rawAwayTeam: away
+      }
+    },
     rawTitle: `${player}: ${label} O/U ${line}`,
     noTitle: `${player}: ${label} O/U ${line}`,
     url: googleUrl(bookTitle, player, label)
@@ -785,12 +919,18 @@ module.exports = async function handler(req, res) {
       const baseDebug = {
         sport: call.sport,
         endpoint: call.endpoint,
+        requestPath: requestPath(call.endpoint, call.params),
         bookmaker: call.bookmaker,
         exchange: call.exchange,
         supplement: call.kind === 'mlb_supplement' ? 'mlb_individual_bookmaker_main_lines' : undefined,
         requestedMarkets: call.markets,
         responseMs: result.elapsedMs,
         creditHeaders: creditHeaders(r.headers)
+      };
+      const sourceMeta = {
+        endpoint: call.endpoint,
+        requestPath: requestPath(call.endpoint, call.params),
+        fetchTimestamp: new Date().toISOString()
       };
 
       if (!r.ok) {
@@ -807,7 +947,7 @@ module.exports = async function handler(req, res) {
         const allExchangeRows = listFromPayload(result.json);
         const exchangeRows = allExchangeRows.filter(row => inTimeWindow(row.commence_time, timeWindow));
         const normalizedExchange = exchangeRows
-          .map(m => normalizeExchangeMarket(call.exchange, m, call.sport, { skipped }))
+          .map(m => normalizeExchangeMarket(call.exchange, m, call.sport, { skipped }, sourceMeta))
           .filter(Boolean);
 
         normalizedExchange.forEach(m => {
@@ -831,7 +971,7 @@ module.exports = async function handler(req, res) {
         const allRows = listFromPayload(result.json);
         const rows = allRows.filter(row => inTimeWindow(row.commence_time || row.start_time || row.startTime, timeWindow));
         const normalizedProps = rows
-          .map(row => normalizePropRow(row, call.sport, { skipped }))
+          .map(row => normalizePropRow(row, call.sport, { skipped }, sourceMeta))
           .filter(Boolean);
 
         normalizedProps.forEach(m => {
@@ -864,7 +1004,7 @@ module.exports = async function handler(req, res) {
           rawBooksSeen[key] = b.title || b.key;
           if (REMOVED_BOOK_SET.has(key)) excludedBooksSeen[key] = b.title || b.key;
         }
-        const normalized = normalizeEvent(ev, call.sport, { skipped });
+        const normalized = normalizeEvent(ev, call.sport, { skipped }, sourceMeta);
         normalizedCount += normalized.length;
         normalized.forEach(m => {
           booksSeen[m.platform] = m.bookTitle || m.platform;
