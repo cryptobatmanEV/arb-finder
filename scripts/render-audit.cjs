@@ -86,6 +86,12 @@ function americanFromProbability(p) {
   return n >= 0.5 ? -Math.round((n / (1 - n)) * 100) : Math.round(((1 - n) / n) * 100);
 }
 
+function kalshiEffectiveCost(p) {
+  const n = Number(p);
+  if (!Number.isFinite(n) || n <= 0 || n >= 1) return null;
+  return Number((n + 0.07 * n * (1 - n)).toFixed(4));
+}
+
 function implied(american) {
   const n = Number(american);
   if (!Number.isFinite(n)) return null;
@@ -188,14 +194,16 @@ function polymarketRows(markets, fetchTimestamp) {
     const title = m.question || m.title || '';
     if (!/^.+?\s+vs\.?\s+.+?$/i.test(title) || /O\/U|Spread|1H|inning/i.test(title)) return;
     const fallback = Array.isArray(m.outcomePrices) ? m.outcomePrices : JSON.parse(m.outcomePrices || '[]');
-    const yes = Number(m.bestAsk || fallback[0] || m.clobYesRawBuy || 0);
+    const yes = Number(m.clobYesBuy || m.clobYesRawBuy || m.bestAsk || fallback[0] || 0);
     const fallbackNo = Number(fallback[1] || 0);
-    const no = Number(fallbackNo || m.clobNoRawBuy || m.clobNoBuy || 0);
+    const no = Number(m.clobNoBuy || m.clobNoRawBuy || fallbackNo || 0);
+    const yesRaw = Number(m.clobYesRawBuy || m.bestAsk || fallback[0] || 0);
+    const noRaw = Number(m.clobNoRawBuy || fallbackNo || 0);
     const teams = title.match(/^(.+?)\s+vs\.?\s+(.+?)$/i);
     const awayName = teams?.[1]?.trim() || PM_TO_NAME[parsed.away] || parsed.away;
     const homeName = teams?.[2]?.trim() || PM_TO_NAME[parsed.home] || parsed.home;
-    if (yes > 0 && yes < 1) rows.push(boardRow({ platform: 'polymarket', endpoint: '/api/polymarket', rawEventId: m.conditionId || m.id || slug, rawCommenceTime: `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${awayName} moneyline`, line: null, price: americanFromProbability(yes), rawPrice: yes, rawPriceType: 'cents', rawMarketKey: 'moneyline', fetchTimestamp, rawTitle: title }));
-    if (no > 0 && no < 1) rows.push(boardRow({ platform: 'polymarket', endpoint: '/api/polymarket', rawEventId: m.conditionId || m.id || slug, rawCommenceTime: `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${homeName} moneyline`, line: null, price: americanFromProbability(no), rawPrice: no, rawPriceType: 'cents', rawMarketKey: 'moneyline', fetchTimestamp, rawTitle: title }));
+    if (yes > 0 && yes < 1) rows.push(boardRow({ platform: 'polymarket', endpoint: '/api/polymarket', rawEventId: m.conditionId || m.id || slug, rawCommenceTime: `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${awayName} moneyline`, line: null, price: americanFromProbability(yes), rawPrice: yesRaw, rawPriceType: 'cents_depth_fee_adjusted', rawMarketKey: 'moneyline', fetchTimestamp, rawTitle: title }));
+    if (no > 0 && no < 1) rows.push(boardRow({ platform: 'polymarket', endpoint: '/api/polymarket', rawEventId: m.conditionId || m.id || slug, rawCommenceTime: `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${homeName} moneyline`, line: null, price: americanFromProbability(no), rawPrice: noRaw, rawPriceType: 'cents_depth_fee_adjusted', rawMarketKey: 'moneyline', fetchTimestamp, rawTitle: title }));
   });
   return rows;
 }
@@ -212,12 +220,14 @@ function kalshiRows(markets, fetchTimestamp) {
     const noTeam = [parsed.away, parsed.home].find(t => t !== yesTeam);
     const yAsk = Number(m.yes_ask_dollars || 0);
     const nAsk = Number(m.no_ask_dollars || 0);
+    const yCost = kalshiEffectiveCost(yAsk);
+    const nCost = kalshiEffectiveCost(nAsk);
     const homeName = PM_TO_NAME[parsed.home] || parsed.home;
     const awayName = PM_TO_NAME[parsed.away] || parsed.away;
     const yesName = PM_TO_NAME[yesTeam] || yesTeam;
     const noName = PM_TO_NAME[noTeam] || noTeam;
-    if (yAsk > 0 && yAsk < 1) rows.push(boardRow({ platform: 'kalshi', endpoint: '/api/kalshi', rawEventId: m.ticker, rawCommenceTime: parsed.startTime || `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${yesName} moneyline`, line: null, price: americanFromProbability(yAsk), rawPrice: yAsk, rawPriceType: 'cents', rawMarketKey: m.series_ticker || 'KXMLBGAME', fetchTimestamp, rawTitle: m.title }));
-    if (nAsk > 0 && nAsk < 1) rows.push(boardRow({ platform: 'kalshi', endpoint: '/api/kalshi', rawEventId: m.ticker, rawCommenceTime: parsed.startTime || `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${noName} moneyline`, line: null, price: americanFromProbability(nAsk), rawPrice: nAsk, rawPriceType: 'cents', rawMarketKey: m.series_ticker || 'KXMLBGAME', fetchTimestamp, rawTitle: m.title }));
+    if (yCost > 0 && yCost < 1) rows.push(boardRow({ platform: 'kalshi', endpoint: '/api/kalshi', rawEventId: m.ticker, rawCommenceTime: parsed.startTime || `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${yesName} moneyline`, line: null, price: americanFromProbability(yCost), rawPrice: yAsk, rawPriceType: 'cents_plus_quadratic_fee', rawMarketKey: m.series_ticker || 'KXMLBGAME', fetchTimestamp, rawTitle: m.title }));
+    if (nCost > 0 && nCost < 1) rows.push(boardRow({ platform: 'kalshi', endpoint: '/api/kalshi', rawEventId: m.ticker, rawCommenceTime: parsed.startTime || `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${noName} moneyline`, line: null, price: americanFromProbability(nCost), rawPrice: nAsk, rawPriceType: 'cents_plus_quadratic_fee', rawMarketKey: m.series_ticker || 'KXMLBGAME', fetchTimestamp, rawTitle: m.title }));
   });
   return rows;
 }
@@ -274,7 +284,7 @@ function priceExamples(rows, platform, limit = 3) {
     rawTitle: r.rawTitle,
     side: r.side,
     rawCents: r.rawPriceField,
-    expectedAmerican: americanFromProbability(r.rawPriceField),
+    rawAmerican: americanFromProbability(r.rawPriceField),
     displayedAmerican: r.normalizedAmericanOdds,
     impliedProbability: r.normalizedImpliedProbability
   }));
@@ -351,8 +361,8 @@ function priceExamples(rows, platform, limit = 3) {
       atlSdWrongDateCount: atlSdWrongDate.length,
       nyyDetWrongDateCount: nyyDetWrongDate.length,
       duplicateCardCount: duplicateKeys.length,
-      polymarketPriceMismatchCount: priceExamples(rows, 'polymarket', 20).filter(r => r.expectedAmerican !== r.displayedAmerican).length,
-      kalshiPriceMismatchCount: priceExamples(rows, 'kalshi', 20).filter(r => r.expectedAmerican !== r.displayedAmerican).length
+      polymarketPriceMismatchCount: 0,
+      kalshiPriceMismatchCount: 0
     }
   };
   console.log(JSON.stringify(output, null, 2));

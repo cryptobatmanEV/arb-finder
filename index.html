@@ -767,8 +767,10 @@ function extractPolymarketStructure(m) {
   // If clobYesBuy/clobNoBuy are null, the proxy already determined market isn't real
   const fallbackYes = parseFloat(fallback[0] || 0);
   const fallbackNo = parseFloat(fallback[1] || 0);
-  const yesPrice = bestAsk > 0.01 ? bestAsk : fallbackYes > 0.01 ? fallbackYes : clobYesRaw > 0.01 ? clobYesRaw : clobYes;
-  const noPrice = fallbackNo > 0.01 ? fallbackNo : clobNoRaw > 0.01 ? clobNoRaw : clobNo > 0.01 ? clobNo : bestBid > 0.01 ? (1 - bestBid) : 0;
+  const yesRawPrice = clobYesRaw > 0.01 ? clobYesRaw : bestAsk > 0.01 ? bestAsk : fallbackYes;
+  const noRawPrice = clobNoRaw > 0.01 ? clobNoRaw : fallbackNo > 0.01 ? fallbackNo : bestBid > 0.01 ? (1 - bestBid) : 0;
+  const yesPrice = clobYes > 0.01 ? clobYes : yesRawPrice;
+  const noPrice = clobNo > 0.01 ? clobNo : noRawPrice;
 
   if (!yesPrice || yesPrice < 0.02 || yesPrice > 0.98) return null;
   // Reject markets where $50 is not fully fillable (too illiquid to arb)
@@ -782,19 +784,24 @@ function extractPolymarketStructure(m) {
     rawTitle: title,
     sport, gameKey, teams, marketType, line, player, statType, gameDate,
     yesPrice, noPrice,
-    rawPrice: yesPrice,
-    rawNoPrice: noPrice,
+    rawPrice: yesRawPrice,
+    rawNoPrice: noRawPrice,
     priceAudit: {
       source: 'polymarket',
       rawTitle: title,
-      yesFieldUsed: bestAsk > 0.01 ? 'bestAsk' : fallbackYes > 0.01 ? 'outcomePrices[0]' : clobYesRaw > 0.01 ? 'clobYesRawBuy_depth' : 'clobYesBuy_fee_adjusted',
-      noFieldUsed: fallbackNo > 0.01 ? 'outcomePrices[1]' : clobNoRaw > 0.01 ? 'clobNoRawBuy_depth' : clobNo > 0.01 ? 'clobNoBuy_fee_adjusted' : '1 - bestBid',
-      rawYesPrice: yesPrice,
-      rawNoPrice: noPrice,
+      yesFieldUsed: clobYes > 0.01 ? 'clobYesBuy_depth_fee_adjusted' : clobYesRaw > 0.01 ? 'clobYesRawBuy_depth' : bestAsk > 0.01 ? 'bestAsk' : 'outcomePrices[0]',
+      noFieldUsed: clobNo > 0.01 ? 'clobNoBuy_depth_fee_adjusted' : clobNoRaw > 0.01 ? 'clobNoRawBuy_depth' : fallbackNo > 0.01 ? 'outcomePrices[1]' : '1 - bestBid',
+      rawYesPrice: yesRawPrice,
+      rawNoPrice: noRawPrice,
+      effectiveYesPrice: yesPrice,
+      effectiveNoPrice: noPrice,
       clobYesRawBuy: m.clobYesRawBuy ?? null,
       clobNoRawBuy: m.clobNoRawBuy ?? null,
       clobYesBuyFeeAdjusted: m.clobYesBuy ?? null,
       clobNoBuyFeeAdjusted: m.clobNoBuy ?? null,
+      feeType: m.feeType ?? null,
+      feeSchedule: m.feeSchedule ?? null,
+      feesEnabled: m.feesEnabled ?? m.hasFee ?? null,
       bestAsk: m.bestAsk ?? null,
       bestBid: m.bestBid ?? null,
       outcomePrices: fallback,
@@ -907,8 +914,8 @@ function extractKalshiStructure(m) {
   // Apply confirmed Kalshi quadratic fee: fee = 0.07 * p * (1-p)
   // Verified: at 53c YES, fee=1.74c, true_cost=54.74c (matches Kalshi's actual payout)
   const kFee = (p) => 0.07 * p * (1 - p);
-  const yesFinal = yAsk;
-  const noFinal  = nAsk;
+  const yesFinal = yAsk > 0 ? parseFloat((yAsk + kFee(yAsk)).toFixed(4)) : 0;
+  const noFinal  = nAsk > 0 ? parseFloat((nAsk + kFee(nAsk)).toFixed(4)) : 0;
   const teamLabel = (abbr) => PM_ABBR[abbr] || abbr || '';
   const otherTeam = winnerTeam && Array.isArray(teams) ? teams.find(t => t !== winnerTeam) : null;
   const spreadTeam = marketType === 'spread' ? extractKalshiFavoredTeam(title) : null;
@@ -921,7 +928,7 @@ function extractKalshiStructure(m) {
     : marketType === 'total' && line != null ? `Under ${line}`
     : marketType === 'spread' && spreadOther && line != null ? `${teamLabel(spreadOther)} +${line}`
     : humanOutcome(title, 'NO');
-  const kalshiProof = (side, displayedSide, price) => ({
+  const kalshiProof = (side, displayedSide, price, rawAsk) => ({
     displayedBook: 'Kalshi',
     displayedGame: teams?.length ? teams.map(teamLabel).join(' vs ') : title,
     displayedMarketType: marketType,
@@ -939,7 +946,7 @@ function extractKalshiStructure(m) {
     rawMarketKey: series,
     normalizedMarketType: marketType,
     rawOutcomeName: side,
-    rawOutcomePrice: price,
+    rawOutcomePrice: rawAsk,
     rawOutcomePoint: line ?? null,
     normalizationFunctionUsed: 'extractKalshiStructure',
     normalizedGameKey: gameKey,
@@ -961,8 +968,8 @@ function extractKalshiStructure(m) {
     sport, gameKey, teams: teams || [], marketType, line,
     player, statType, gameDate: gameDate || null, startTime: startTime || null, isFutures: !!isFutures, winnerTeam,
     yesPrice: yesFinal, noPrice: noFinal,
-    rawPrice: yesFinal,
-    rawNoPrice: noFinal,
+    rawPrice: yAsk,
+    rawNoPrice: nAsk,
     priceAudit: {
       source: 'kalshi',
       rawTitle: title,
@@ -973,13 +980,14 @@ function extractKalshiStructure(m) {
       yesBid: yBid,
       noBid: nBid,
       lastTradedPrice: m.last_price ?? m.lastPrice ?? null,
-      yesFeeAdjustedCost: yAsk > 0 ? yAsk + kFee(yAsk) : null,
-      noFeeAdjustedCost: nAsk > 0 ? nAsk + kFee(nAsk) : null,
+      yesFeeAdjustedCost: yesFinal || null,
+      noFeeAdjustedCost: noFinal || null,
+      feeFormula: 'price + 0.07 * price * (1 - price)',
       warning: (!yAsk || !nAsk) ? 'missing executable ask; row skipped' : null
     },
     sourceProof: {
-      YES: kalshiProof('YES', yesSideLabel, yesFinal),
-      NO: kalshiProof('NO', noSideLabel, noFinal)
+      YES: kalshiProof('YES', yesSideLabel, yesFinal, yAsk),
+      NO: kalshiProof('NO', noSideLabel, noFinal, nAsk)
     },
     url: `https://kalshi.com/markets/${ticker}`,
   };
@@ -2579,6 +2587,9 @@ function ArbLeg({ leg, stake, onStakeChange, label }) {
   const dec  = (1/leg.price).toFixed(2) + 'x';
   const numS = parseFloat(stake) || 0;
   const payout = numS > 0 ? numS / leg.price : 0;
+  const showRawCost = ['kalshi', 'polymarket'].includes(leg.platform)
+    && leg.rawPrice
+    && Math.abs(leg.rawPrice - leg.price) >= 0.004;
 
   return (
     <div className="oj-leg">
@@ -2599,7 +2610,14 @@ function ArbLeg({ leg, stake, onStakeChange, label }) {
       <div className="oj-odds">
         <span className="oj-american">{amer}</span>
         <span className="oj-decimal">{dec}</span>
-        <span className="oj-cents">{fmt(leg.price*100,1)}¢</span>
+        <span className="oj-cents">
+          {fmt(leg.price*100,1)}¢
+          {showRawCost && (
+            <span title="Displayed/pre-fee price; arb math uses executable effective cost" style={{opacity:0.55,fontSize:'0.78em',marginLeft:'3px'}}>
+              ({fmt(leg.rawPrice*100,1)}¢ raw)
+            </span>
+          )}
+        </span>
       </div>
 
       {DEBUG_MODE && leg.platform === 'prophetx' && leg.exchangeDebug && <ProphetXDebug debug={leg.exchangeDebug} />}
