@@ -677,6 +677,30 @@ function kalshiStartTimeFromTicker(ticker) {
   return `20${m[1]}-${mon}-${m[3]}T${hour}:${min}:00Z`;
 }
 
+function parsePolymarketGameStart(raw) {
+  if (!raw) return null;
+  const normalized = String(raw).replace(' ', 'T').replace(/\+00$/, 'Z');
+  const ms = new Date(normalized).getTime();
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+function kalshiStartTimeFromRules(text) {
+  const m = String(text || '').match(/scheduled for ([A-Z][a-z]{2})\s+(\d{1,2}),\s+(20\d{2}) at (\d{1,2}):(\d{2})\s*(AM|PM)\s*(EDT|EST|CDT|CST|PDT|PST)/);
+  if (!m) return null;
+  const months = { Jan:'01', Feb:'02', Mar:'03', Apr:'04', May:'05', Jun:'06', Jul:'07', Aug:'08', Sep:'09', Oct:'10', Nov:'11', Dec:'12' };
+  let hour = parseInt(m[4], 10);
+  if (m[6] === 'PM' && hour !== 12) hour += 12;
+  if (m[6] === 'AM' && hour === 12) hour = 0;
+  const offsetHours = { EDT: 4, EST: 5, CDT: 5, CST: 6, PDT: 7, PST: 8 }[m[7]] || 0;
+  const utcMs = Date.UTC(parseInt(m[3], 10), parseInt(months[m[1]], 10) - 1, parseInt(m[2], 10), hour + offsetHours, parseInt(m[5], 10), 0);
+  return new Date(utcMs).toISOString();
+}
+
+function hasGameStarted(startTime) {
+  const startMs = new Date(startTime || '').getTime();
+  return Number.isFinite(startMs) && Date.now() >= startMs;
+}
+
 // ─── POLYMARKET NORMALIZER ────────────────────────────────────────────────────
 function extractPolymarketStructure(m) {
   const title = m.question || m.title || '';
@@ -697,6 +721,8 @@ function extractPolymarketStructure(m) {
   else if (gameKey.startsWith('mlb-')) sport = 'mlb';
   else if (gameKey.startsWith('nfl-')) sport = 'nfl';
   else if (gameKey.startsWith('nhl-')) sport = 'nhl';
+  const startTime = parsePolymarketGameStart(m.gameStartTime || m.endDate || null);
+  if (hasGameStarted(startTime)) return null;
 
   // Use endDateIso — confirmed accurate by debug (endDateIso=2026-04-25 for Apr 25 game)
   // Slug date can be off by one (created in US timezone before UTC game date)
@@ -782,7 +808,7 @@ function extractPolymarketStructure(m) {
     id: 'pm_' + (m.id || m.conditionId || gameKey + Math.random()),
     platform: 'polymarket',
     rawTitle: title,
-    sport, gameKey, teams, marketType, line, player, statType, gameDate,
+    sport, gameKey, teams, marketType, line, player, statType, gameDate, startTime,
     yesPrice, noPrice,
     rawPrice: yesRawPrice,
     rawNoPrice: noRawPrice,
@@ -892,7 +918,8 @@ function extractKalshiStructure(m) {
     teams = dIdx >= 2 ? gkParts.slice(1, dIdx) : [];
     const dateM2 = gameKey.match(/(\d{4}-\d{2}-\d{2})$/);
     gameDate = dateM2 ? dateM2[1] : null;
-    startTime = kalshiStartTimeFromTicker(ticker);
+    startTime = kalshiStartTimeFromRules(m.rules_primary) || m.occurrence_datetime || kalshiStartTimeFromTicker(ticker);
+    if (hasGameStarted(startTime)) return null;
   }
 
   const yAsk = parseFloat(m.yes_ask_dollars) || 0;

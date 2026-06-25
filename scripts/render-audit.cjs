@@ -92,6 +92,29 @@ function kalshiEffectiveCost(p) {
   return Number((n + 0.07 * n * (1 - n)).toFixed(4));
 }
 
+function parsePolymarketGameStart(raw) {
+  if (!raw) return null;
+  const normalized = String(raw).replace(' ', 'T').replace(/\+00$/, 'Z');
+  const ms = new Date(normalized).getTime();
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+function kalshiStartTimeFromRules(text) {
+  const m = String(text || '').match(/scheduled for ([A-Z][a-z]{2})\s+(\d{1,2}),\s+(20\d{2}) at (\d{1,2}):(\d{2})\s*(AM|PM)\s*(EDT|EST|CDT|CST|PDT|PST)/);
+  if (!m) return null;
+  const months = { Jan:'01', Feb:'02', Mar:'03', Apr:'04', May:'05', Jun:'06', Jul:'07', Aug:'08', Sep:'09', Oct:'10', Nov:'11', Dec:'12' };
+  let hour = parseInt(m[4], 10);
+  if (m[6] === 'PM' && hour !== 12) hour += 12;
+  if (m[6] === 'AM' && hour === 12) hour = 0;
+  const offsetHours = { EDT: 4, EST: 5, CDT: 5, CST: 6, PDT: 7, PST: 8 }[m[7]] || 0;
+  return new Date(Date.UTC(parseInt(m[3], 10), parseInt(months[m[1]], 10) - 1, parseInt(m[2], 10), hour + offsetHours, parseInt(m[5], 10), 0)).toISOString();
+}
+
+function hasGameStarted(startTime) {
+  const startMs = new Date(startTime || '').getTime();
+  return Number.isFinite(startMs) && Date.now() >= startMs;
+}
+
 function implied(american) {
   const n = Number(american);
   if (!Number.isFinite(n)) return null;
@@ -191,6 +214,8 @@ function polymarketRows(markets, fetchTimestamp) {
     if (!slug.startsWith('mlb-')) return;
     const parsed = slugTeamsDate(slug);
     if (!parsed) return;
+    const startTime = parsePolymarketGameStart(m.gameStartTime || m.endDate || null);
+    if (hasGameStarted(startTime)) return;
     const title = m.question || m.title || '';
     if (!/^.+?\s+vs\.?\s+.+?$/i.test(title) || /O\/U|Spread|1H|inning/i.test(title)) return;
     const fallback = Array.isArray(m.outcomePrices) ? m.outcomePrices : JSON.parse(m.outcomePrices || '[]');
@@ -202,8 +227,8 @@ function polymarketRows(markets, fetchTimestamp) {
     const teams = title.match(/^(.+?)\s+vs\.?\s+(.+?)$/i);
     const awayName = teams?.[1]?.trim() || PM_TO_NAME[parsed.away] || parsed.away;
     const homeName = teams?.[2]?.trim() || PM_TO_NAME[parsed.home] || parsed.home;
-    if (yes > 0 && yes < 1) rows.push(boardRow({ platform: 'polymarket', endpoint: '/api/polymarket', rawEventId: m.conditionId || m.id || slug, rawCommenceTime: `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${awayName} moneyline`, line: null, price: americanFromProbability(yes), rawPrice: yesRaw, rawPriceType: 'cents_depth_fee_adjusted', rawMarketKey: 'moneyline', fetchTimestamp, rawTitle: title }));
-    if (no > 0 && no < 1) rows.push(boardRow({ platform: 'polymarket', endpoint: '/api/polymarket', rawEventId: m.conditionId || m.id || slug, rawCommenceTime: `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${homeName} moneyline`, line: null, price: americanFromProbability(no), rawPrice: noRaw, rawPriceType: 'cents_depth_fee_adjusted', rawMarketKey: 'moneyline', fetchTimestamp, rawTitle: title }));
+    if (yes > 0 && yes < 1) rows.push(boardRow({ platform: 'polymarket', endpoint: '/api/polymarket', rawEventId: m.conditionId || m.id || slug, rawCommenceTime: startTime || `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${awayName} moneyline`, line: null, price: americanFromProbability(yes), rawPrice: yesRaw, rawPriceType: 'cents_depth_fee_adjusted', rawMarketKey: 'moneyline', fetchTimestamp, rawTitle: title }));
+    if (no > 0 && no < 1) rows.push(boardRow({ platform: 'polymarket', endpoint: '/api/polymarket', rawEventId: m.conditionId || m.id || slug, rawCommenceTime: startTime || `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${homeName} moneyline`, line: null, price: americanFromProbability(no), rawPrice: noRaw, rawPriceType: 'cents_depth_fee_adjusted', rawMarketKey: 'moneyline', fetchTimestamp, rawTitle: title }));
   });
   return rows;
 }
@@ -214,6 +239,8 @@ function kalshiRows(markets, fetchTimestamp) {
     if (!String(m.ticker || '').startsWith('KXMLBGAME')) return;
     const parsed = parseKalshiTicker(m.ticker);
     if (!parsed) return;
+    const startTime = kalshiStartTimeFromRules(m.rules_primary) || m.occurrence_datetime || parsed.startTime || `${parsed.date}T00:00:00Z`;
+    if (hasGameStarted(startTime)) return;
     const suffix = String(m.ticker).split('-').pop();
     const yesTeam = KA_TO_PM[suffix] || null;
     if (!yesTeam) return;
@@ -226,8 +253,8 @@ function kalshiRows(markets, fetchTimestamp) {
     const awayName = PM_TO_NAME[parsed.away] || parsed.away;
     const yesName = PM_TO_NAME[yesTeam] || yesTeam;
     const noName = PM_TO_NAME[noTeam] || noTeam;
-    if (yCost > 0 && yCost < 1) rows.push(boardRow({ platform: 'kalshi', endpoint: '/api/kalshi', rawEventId: m.ticker, rawCommenceTime: parsed.startTime || `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${yesName} moneyline`, line: null, price: americanFromProbability(yCost), rawPrice: yAsk, rawPriceType: 'cents_plus_quadratic_fee', rawMarketKey: m.series_ticker || 'KXMLBGAME', fetchTimestamp, rawTitle: m.title }));
-    if (nCost > 0 && nCost < 1) rows.push(boardRow({ platform: 'kalshi', endpoint: '/api/kalshi', rawEventId: m.ticker, rawCommenceTime: parsed.startTime || `${parsed.date}T00:00:00Z`, home: homeName, away: awayName, marketType: 'moneyline', side: `${noName} moneyline`, line: null, price: americanFromProbability(nCost), rawPrice: nAsk, rawPriceType: 'cents_plus_quadratic_fee', rawMarketKey: m.series_ticker || 'KXMLBGAME', fetchTimestamp, rawTitle: m.title }));
+    if (yCost > 0 && yCost < 1) rows.push(boardRow({ platform: 'kalshi', endpoint: '/api/kalshi', rawEventId: m.ticker, rawCommenceTime: startTime, home: homeName, away: awayName, marketType: 'moneyline', side: `${yesName} moneyline`, line: null, price: americanFromProbability(yCost), rawPrice: yAsk, rawPriceType: 'cents_plus_quadratic_fee', rawMarketKey: m.series_ticker || 'KXMLBGAME', fetchTimestamp, rawTitle: m.title }));
+    if (nCost > 0 && nCost < 1) rows.push(boardRow({ platform: 'kalshi', endpoint: '/api/kalshi', rawEventId: m.ticker, rawCommenceTime: startTime, home: homeName, away: awayName, marketType: 'moneyline', side: `${noName} moneyline`, line: null, price: americanFromProbability(nCost), rawPrice: nAsk, rawPriceType: 'cents_plus_quadratic_fee', rawMarketKey: m.series_ticker || 'KXMLBGAME', fetchTimestamp, rawTitle: m.title }));
   });
   return rows;
 }
