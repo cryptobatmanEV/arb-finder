@@ -701,6 +701,23 @@ function hasGameStarted(startTime) {
   return Number.isFinite(startMs) && Date.now() >= startMs;
 }
 
+function appLocalDate(rawTime, fallback = null) {
+  if (!rawTime) return fallback;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(rawTime))) return String(rawTime);
+  const date = new Date(rawTime);
+  if (!Number.isFinite(date.getTime())) return fallback;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Chicago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date).reduce((acc, part) => {
+    acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
 // ─── POLYMARKET NORMALIZER ────────────────────────────────────────────────────
 function extractPolymarketStructure(m) {
   const title = m.question || m.title || '';
@@ -711,22 +728,20 @@ function extractPolymarketStructure(m) {
   // Skip NRFI (No Run First Inning) — not available on Kalshi
   if (/will there be a run scored in the first inning/i.test(title)) return null;
 
-  // gameKey IS the event slug
-  const gameKey = slug;
-  if (!gameKey) return null;
+  if (!slug) return null;
 
   // Sport from slug prefix
   let sport = 'other';
-  if (gameKey.startsWith('nba-')) sport = 'nba';
-  else if (gameKey.startsWith('mlb-')) sport = 'mlb';
-  else if (gameKey.startsWith('nfl-')) sport = 'nfl';
-  else if (gameKey.startsWith('nhl-')) sport = 'nhl';
+  if (slug.startsWith('nba-')) sport = 'nba';
+  else if (slug.startsWith('mlb-')) sport = 'mlb';
+  else if (slug.startsWith('nfl-')) sport = 'nfl';
+  else if (slug.startsWith('nhl-')) sport = 'nhl';
   const startTime = parsePolymarketGameStart(m.gameStartTime || m.endDate || null);
   if (hasGameStarted(startTime)) return null;
 
-  // Use endDateIso — confirmed accurate by debug (endDateIso=2026-04-25 for Apr 25 game)
-  // Slug date can be off by one (created in US timezone before UTC game date)
-  const gameDate = (gameKey.match(/(\d{4}-\d{2}-\d{2})$/)?.[1] || null);
+  // Slug date can be off by one; use the actual local start date for matching.
+  const slugDate = (slug.match(/(\d{4}-\d{2}-\d{2})$/)?.[1] || null);
+  const gameDate = appLocalDate(startTime, slugDate);
 
   // Market type + line + prop fields
   let marketType = 'moneyline';
@@ -770,9 +785,12 @@ function extractPolymarketStructure(m) {
   }
 
   // Teams from slug: nba-okc-phx-2026-04-25 → ['okc','phx']
-  const slugParts = gameKey.split('-');
+  const slugParts = slug.split('-');
   const dateIdx = slugParts.findIndex(p => /^20\d{2}$/.test(p));
   const teams = dateIdx >= 2 ? slugParts.slice(1, dateIdx) : [];
+  const gameKey = (sport && teams.length >= 2 && gameDate)
+    ? `${sport}-${teams[0]}-${teams[1]}-${gameDate}`
+    : slug;
 
   // Use depth-adjusted orderbook prices (confirmed accurate vs top-of-book)
   // clobYesBuy = weighted avg fill price for $50 bet on YES side
@@ -839,7 +857,7 @@ function extractPolymarketStructure(m) {
       clobLive: !!m.clobLive,
       warning: (!clobYesRaw && !bestAsk) || (!clobNoRaw && !clobNo && !fallbackNo) ? 'missing executable quote fallback used' : null
     },
-    url: gameKey ? `https://polymarket.com/sports/${sport}/${gameKey}` : 'https://polymarket.com',
+    url: slug ? `https://polymarket.com/sports/${sport}/${slug}` : 'https://polymarket.com',
   };
 }
 
@@ -1012,6 +1030,8 @@ function extractKalshiStructure(m) {
       rawNoPrice: nAsk,
       yesBid: yBid,
       noBid: nBid,
+      kalshiYesAskLevels: m.kalshiYesAskLevels || null,
+      kalshiNoAskLevels: m.kalshiNoAskLevels || null,
       lastTradedPrice: m.last_price ?? m.lastPrice ?? null,
       yesFeeAdjustedCost: yesFinal || null,
       noFeeAdjustedCost: noFinal || null,
@@ -2058,25 +2078,12 @@ function canonicalEventKey(m) {
   const away = teams[0] || teamNameToAbbr(m?.away || m?.sourceProof?.YES?.rawAwayTeam || m?.sourceProof?.NO?.rawAwayTeam, m?.sport) || '';
   const home = teams[1] || teamNameToAbbr(m?.home || m?.sourceProof?.YES?.rawHomeTeam || m?.sourceProof?.NO?.rawHomeTeam, m?.sport) || '';
   const rawTime = m?.sourceProof?.YES?.rawCommenceTime || m?.sourceProof?.NO?.rawCommenceTime || m?.startTime || null;
-  const rawDate = rawTime ? String(rawTime).slice(0, 10) : (m?.gameDate || '');
+  const rawDate = displayLocalDate(rawTime, m?.gameDate || '');
   return [m?.sport || '', away, home, rawDate].map(v => String(v || '').toLowerCase()).join('|');
 }
 
 function displayLocalDate(rawTime, fallback = null) {
-  if (!rawTime) return fallback;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(String(rawTime))) return String(rawTime);
-  const date = new Date(rawTime);
-  if (!Number.isFinite(date.getTime())) return fallback;
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Chicago',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  }).formatToParts(date).reduce((acc, part) => {
-    acc[part.type] = part.value;
-    return acc;
-  }, {});
-  return `${parts.year}-${parts.month}-${parts.day}`;
+  return appLocalDate(rawTime, fallback);
 }
 
 function isLiveGameTime(rawTime) {
@@ -2433,7 +2440,9 @@ function effectiveLegPriceForStake(leg, stake) {
     if (adjusted && adjusted > 0 && adjusted < 1) return adjusted;
   }
   if (leg?.platform === 'kalshi' && audit?.rawYesPrice && audit?.rawNoPrice) {
-    const raw = leg.outcome === 'NO' ? Number(audit.rawNoPrice) : Number(audit.rawYesPrice);
+    const levels = leg.outcome === 'NO' ? audit.kalshiNoAskLevels : audit.kalshiYesAskLevels;
+    const rawFill = simulateFillPrice(levels, stakeNum);
+    const raw = rawFill || (leg.outcome === 'NO' ? Number(audit.rawNoPrice) : Number(audit.rawYesPrice));
     const adjusted = feeAdjustedPrice(raw, 0.07);
     if (adjusted && adjusted > 0 && adjusted < 1) return adjusted;
   }
@@ -2763,6 +2772,7 @@ function App() {
   const [filter,   setFilter]   = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [marketFilter, setMarketFilter] = useState('all');
+  const [todayOnly, setTodayOnly] = useState(false);
   const [enabledBooks, setEnabledBooks] = useState(() => {
     try { return JSON.parse(localStorage.getItem('enabledBooks') || 'null') || ALL_BOOK_FILTERS; }
     catch (_) { return ALL_BOOK_FILTERS; }
@@ -2930,15 +2940,16 @@ function App() {
     return () => clearInterval(id);
   }, [refresh]);
 
-  const visibleByBooks = (o) => opportunityPlatforms(o).some(platform => enabledBooks.includes(platform));
+  const visibleByBooks = (o) => enabledBooks.includes(o.legA?.platform) && enabledBooks.includes(o.legB?.platform);
+  const visibleByDate = (o) => !todayOnly || o.gameDate === appLocalDate(new Date().toISOString());
   const coreSet = new Set(CORE_PLATFORMS);
   const sportsbookSet = new Set(SPORTSBOOK_PLATFORMS);
   const exchangeSet = new Set(EXCHANGE_PLATFORMS);
   const visibleBySource = (o) => {
-    const platforms = opportunityPlatforms(o);
-    if (sourceFilter === 'core') return platforms.some(platform => coreSet.has(platform));
-    if (sourceFilter === 'sportsbook') return platforms.some(platform => sportsbookSet.has(platform));
-    if (sourceFilter === 'exchange') return platforms.some(platform => exchangeSet.has(platform));
+    const platforms = [o.legA?.platform, o.legB?.platform].filter(Boolean);
+    if (sourceFilter === 'core') return platforms.every(platform => coreSet.has(platform));
+    if (sourceFilter === 'sportsbook') return platforms.every(platform => sportsbookSet.has(platform));
+    if (sourceFilter === 'exchange') return platforms.every(platform => exchangeSet.has(platform));
     return true;
   };
   const visibleByMarket = (o) => {
@@ -2946,7 +2957,7 @@ function App() {
     if (['moneyline','spread','total'].includes(marketFilter)) return o.marketType === marketFilter;
     return true;
   };
-  const visibleOpp = (o) => visibleByBooks(o) && visibleBySource(o) && visibleByMarket(o);
+  const visibleOpp = (o) => visibleByBooks(o) && visibleBySource(o) && visibleByMarket(o) && visibleByDate(o);
   const fArbs = (filter === 'all' ? arbs : arbs.filter(a => a.sport === filter)).filter(visibleOpp);
   const fNear = (filter === 'all' ? near : near.filter(a => a.sport === filter)).filter(visibleOpp);
   const displayArbs = fArbs;
@@ -3023,6 +3034,9 @@ function App() {
             {FILTER_LB[f]}
           </button>
         ))}
+        <button className={`fbtn${todayOnly?' active':''}`} onClick={() => setTodayOnly(v => !v)}>
+          Today Only
+        </button>
         <div className="near-toggle" onClick={() => setShowNear(!showNear)}>
           <div className={`tswitch${showNear?' on':''}`}><div className="tknob"/></div>
           Show near-arbs
@@ -3051,6 +3065,7 @@ function App() {
           <div className="book-actions">
             <button className="tiny-btn" onClick={() => setEnabledBooks(ALL_BOOK_FILTERS)}>All</button>
             <button className="tiny-btn" onClick={() => setEnabledBooks(CORE_PLATFORMS)}>Core only</button>
+            <button className="tiny-btn" onClick={() => setEnabledBooks([])}>Clear</button>
           </div>
         </div>
         <div className="book-grid">
