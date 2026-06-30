@@ -2,7 +2,7 @@
  * Polymarket Sports Proxy
  * Uses Gamma API for market discovery, CLOB API for real-time prices
  * Gamma bestAsk/bestBid is cached ~5 min — CLOB /book gives live data
- * Applies 3% on winnings fee (empirically confirmed from live data)
+ * Applies official taker fee formula and simulates market-order slippage.
  */
 
 const GAMMA = 'https://gamma-api.polymarket.com';
@@ -35,29 +35,10 @@ const KA_TO_PM = {
   // NHL uses WSH for Capitals (same as MLB Nationals)
 };
 
-// Polymarket sports fee — empirically verified against live UI (May 2026):
-//
-//   Actual formula (BUY orders, fees collected in shares):
-//     fee_shares = shares × feeRate × (1 - ask)
-//     effective_price = ask / (1 - feeRate × (1 - ask))
-//                     = ask / (0.97 + 0.03 × ask)  [when feeRate = 0.03]
-//
-//   feeRate = 0.03 for Sports markets deployed after March 30, 2026.
-//   fee-free markets have feesEnabled=false in Gamma API response.
-//
-//   Verified on two live price points:
-//     LAL ask 40¢  → effective 40.73¢ → payout $24.55/\$10 ✓ (matches Polymarket UI)
-//     CLE ask 63¢  → effective 63.71¢ → payout $15.70/\$10 ✓ (matches Polymarket UI)
-//
-//   NOTE: Official docs describe a different formula (fee = C×p×feeRate×(p×(1-p))^exp)
-//   that produces ~0.29 USDC fee per 100 shares at 40¢, but the actual BUY-order
-//   behavior matches this empirical formula instead. Discrepancy likely because docs
-//   describe the USDC fee pool, while BUY order fee collection in shares uses a
-//   different effective rate. The CLOB /fee-rate?token_id= endpoint returns the
-//   authoritative feeRateBps per market for order signing.
 const SPORTS_FEE_RATE = 0.03;
+const DEFAULT_REFERENCE_STAKE = Number(process.env.POLYMARKET_REFERENCE_STAKE || 10);
 const pmPrice = (ask, feeRate = SPORTS_FEE_RATE) =>
-  parseFloat((ask / (1 - feeRate * (1 - ask))).toFixed(4));
+  parseFloat((ask + feeRate * ask * (1 - ask)).toFixed(5));
 
 function gameKeyFromKalshiTicker(ticker) {
   const parts  = ticker.split('-');
@@ -178,6 +159,15 @@ function simulateFill(asks, stakeUSDC) {
   return totalSpent / totalShares; // volume-weighted average price
 }
 
+function compactLevels(levels, limit = 25) {
+  return (levels || [])
+    .slice(0, limit)
+    .map(level => ({
+      price: Number(level.price.toFixed(4)),
+      size: Number(level.size.toFixed(4))
+    }));
+}
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 export default async function handler(req, res) {
@@ -230,7 +220,9 @@ export default async function handler(req, res) {
     //    For deep markets (moneylines) the entire order fills at best ask → no change.
     //    For thin markets (props, $33 vol) the order walks up the book → higher avg price
     //    → our payout matches PM's actual execution price instead of the best-ask price.
-    const REFERENCE_STAKE = 50; // USDC reference order to simulate fill depth
+    const REFERENCE_STAKE = Number.isFinite(DEFAULT_REFERENCE_STAKE) && DEFAULT_REFERENCE_STAKE > 0
+      ? DEFAULT_REFERENCE_STAKE
+      : 10;
 
     const enriched = allMarkets.map(m => {
       let ids = m.clobTokenIds;
@@ -289,9 +281,13 @@ export default async function handler(req, res) {
         clobNoBuy,
         clobYesRawBuy: yesBase > 0.01 ? parseFloat(yesBase.toFixed(4)) : null,
         clobNoRawBuy: noBase > 0.01 ? parseFloat(noBase.toFixed(4)) : null,
+        clobYesAskLevels: compactLevels(yesClob?.asks || []),
+        clobNoAskLevels: compactLevels(noClob?.asks || []),
         yesFullyFillable: true,
         clobLive,        // true = prices from live CLOB, false = Gamma cache
         hasFee,          // true = sports fee applied, false = fee-free market
+        feeRate: hasFee ? SPORTS_FEE_RATE : 0,
+        referenceStake: REFERENCE_STAKE,
         clobYesTokenId: yesTokenId || null,
         clobNoTokenId: noTokenId || null,
       };
@@ -305,6 +301,8 @@ export default async function handler(req, res) {
       slugsChecked: slugs.length,
       clobLiveCount: liveCount,
       clobCachedCount: enriched.length - liveCount,
+      referenceStake: REFERENCE_STAKE,
+      feeModel: 'official_taker_fee_per_share = p + feeRate * p * (1 - p)',
     });
 
   } catch(err) {

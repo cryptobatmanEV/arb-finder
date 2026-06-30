@@ -825,6 +825,10 @@ function extractPolymarketStructure(m) {
       clobNoRawBuy: m.clobNoRawBuy ?? null,
       clobYesBuyFeeAdjusted: m.clobYesBuy ?? null,
       clobNoBuyFeeAdjusted: m.clobNoBuy ?? null,
+      clobYesAskLevels: m.clobYesAskLevels || null,
+      clobNoAskLevels: m.clobNoAskLevels || null,
+      feeRate: m.feeRate ?? (m.feesEnabled === true || m.hasFee === true ? 0.03 : 0),
+      referenceStake: m.referenceStake ?? null,
       feeType: m.feeType ?? null,
       feeSchedule: m.feeSchedule ?? null,
       feesEnabled: m.feesEnabled ?? m.hasFee ?? null,
@@ -2296,9 +2300,10 @@ function PlatBadge({ name, status, count }) {
 
 function OJLeg({ leg, stake }) {
   const cls     = PLAT_CLS[leg.platform] || '';
-  const amer    = probToAmerican(leg.price);
-  const decimal = (1 / leg.price).toFixed(2) + 'x';
-  const ret     = stake / leg.price;
+  const stakeAdjustedPrice = stake > 0 ? effectiveLegPriceForStake(leg, stake) : leg.price;
+  const amer    = probToAmerican(stakeAdjustedPrice);
+  const decimal = (1 / stakeAdjustedPrice).toFixed(2) + 'x';
+  const ret     = payoutForStake(leg, stake);
   // Summarize what the bet means in plain English
   const betDesc = leg.outcome === 'YES' ? leg.rawTitle : `NOT: ${leg.rawTitle}`;
   return (
@@ -2309,7 +2314,7 @@ function OJLeg({ leg, stake }) {
       <div className="oj-odds">
         <span className="oj-american">{amer}</span>
         <span className="oj-decimal">{decimal}</span>
-        <span className="oj-cents">{fmt(leg.price * 100, 1)}¢{leg.platform === 'kalshi' && leg.rawPrice ? <span title="Kalshi displayed price (pre-fee)" style={{opacity:0.55,fontSize:'0.78em',marginLeft:'3px'}}>({Math.round(leg.rawPrice*100)}¢ raw)</span> : null}</span>
+        <span className="oj-cents">{fmt(stakeAdjustedPrice * 100, 1)}¢{leg.platform === 'kalshi' && leg.rawPrice ? <span title="Kalshi displayed price (pre-fee)" style={{opacity:0.55,fontSize:'0.78em',marginLeft:'3px'}}>({Math.round(leg.rawPrice*100)}¢ raw)</span> : null}</span>
       </div>
       <div className="oj-stake-line">
         <span className="oj-stake-val">{fmtUSD(stake)}</span>
@@ -2389,10 +2394,60 @@ function displayBetLabel(leg) {
   return cleanTeamLabel(side) || humanOutcome(leg?.rawTitle, leg?.outcome);
 }
 
+function simulateFillPrice(levels, stake) {
+  if (!Array.isArray(levels) || !levels.length || !stake || stake <= 0) return null;
+  let remaining = stake;
+  let shares = 0;
+  let spent = 0;
+  for (const level of levels) {
+    const price = Number(level.price);
+    const size = Number(level.size);
+    if (!Number.isFinite(price) || !Number.isFinite(size) || price <= 0 || price >= 1 || size <= 0) continue;
+    const levelCost = price * size;
+    const use = Math.min(remaining, levelCost);
+    spent += use;
+    shares += use / price;
+    remaining -= use;
+    if (remaining <= 0.001) break;
+  }
+  if (spent <= 0 || shares <= 0) return null;
+  return spent / shares;
+}
+
+function feeAdjustedPrice(rawPrice, feeRate = 0) {
+  const p = Number(rawPrice);
+  const r = Number(feeRate) || 0;
+  if (!Number.isFinite(p) || p <= 0 || p >= 1) return null;
+  return p + r * p * (1 - p);
+}
+
+function effectiveLegPriceForStake(leg, stake) {
+  const stakeNum = Number(stake) || 0;
+  const audit = leg?.sourceProof?.priceAudit || leg?.priceAudit || null;
+  if (stakeNum > 0 && leg?.platform === 'polymarket' && audit) {
+    const levels = leg.outcome === 'NO' ? audit.clobNoAskLevels : audit.clobYesAskLevels;
+    const rawFill = simulateFillPrice(levels, stakeNum);
+    const adjusted = feeAdjustedPrice(rawFill, audit.feeRate);
+    if (adjusted && adjusted > 0 && adjusted < 1) return adjusted;
+  }
+  if (leg?.platform === 'kalshi' && audit?.rawYesPrice && audit?.rawNoPrice) {
+    const raw = leg.outcome === 'NO' ? Number(audit.rawNoPrice) : Number(audit.rawYesPrice);
+    const adjusted = feeAdjustedPrice(raw, 0.07);
+    if (adjusted && adjusted > 0 && adjusted < 1) return adjusted;
+  }
+  return leg?.price || 0;
+}
+
+function payoutForStake(leg, stake) {
+  const stakeNum = Number(stake) || 0;
+  const price = effectiveLegPriceForStake(leg, stakeNum);
+  return stakeNum > 0 && price > 0 ? stakeNum / price : 0;
+}
+
 function SideBoardRow({ book }) {
   const [stake, setStake] = React.useState('');
   const stakeNum = parseFloat(stake) || 0;
-  const payout = stakeNum > 0 && book.price ? stakeNum / book.price : 0;
+  const payout = payoutForStake(book, stakeNum);
   return (
     <div className="side-board-row">
       <span className="side-board-book">{PLAT_LB[book.platform] || book.platform}</span>
@@ -2485,8 +2540,8 @@ function ArbCard({ opp }) {
   const numA = parseFloat(stakeA) || 0;
   const numB = parseFloat(stakeB) || 0;
   const totalStake = numA + numB;
-  const retA = numA > 0 ? numA / legA.price : 0;  // total return if leg A wins
-  const retB = numB > 0 ? numB / legB.price : 0;  // total return if leg B wins
+  const retA = payoutForStake(legA, numA);  // total return if leg A wins
+  const retB = payoutForStake(legB, numB);  // total return if leg B wins
   const profitIfA = numA > 0 ? retA - totalStake : 0;
   const profitIfB = numB > 0 ? retB - totalStake : 0;
   const isBalanced = numA > 0 && numB > 0 && Math.abs(profitIfA - profitIfB) < 0.10;
@@ -2626,10 +2681,11 @@ function humanOutcome(title, outcome) {
 
 function ArbLeg({ leg, stake, onStakeChange, label }) {
   const cls  = PLAT_CLS[leg.platform] || '';
-  const amer = probToAmerican(leg.price);
-  const dec  = (1/leg.price).toFixed(2) + 'x';
   const numS = parseFloat(stake) || 0;
-  const payout = numS > 0 ? numS / leg.price : 0;
+  const stakeAdjustedPrice = numS > 0 ? effectiveLegPriceForStake(leg, numS) : leg.price;
+  const amer = probToAmerican(stakeAdjustedPrice);
+  const dec  = (1/stakeAdjustedPrice).toFixed(2) + 'x';
+  const payout = payoutForStake(leg, numS);
   const showRawCost = ['kalshi', 'polymarket'].includes(leg.platform)
     && leg.rawPrice
     && Math.abs(leg.rawPrice - leg.price) >= 0.004;
@@ -2654,7 +2710,7 @@ function ArbLeg({ leg, stake, onStakeChange, label }) {
         <span className="oj-american">{amer}</span>
         <span className="oj-decimal">{dec}</span>
         <span className="oj-cents">
-          {fmt(leg.price*100,1)}¢
+          {fmt(stakeAdjustedPrice*100,1)}¢
           {showRawCost && (
             <span title="Displayed/pre-fee price; arb math uses executable effective cost" style={{opacity:0.55,fontSize:'0.78em',marginLeft:'3px'}}>
               ({fmt(leg.rawPrice*100,1)}¢ raw)
