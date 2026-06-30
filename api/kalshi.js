@@ -11,6 +11,12 @@ const SERIES = [
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+function hasExecutableTwoSidedAsk(m) {
+  const yes = Number(m.yes_ask_dollars || 0);
+  const no = Number(m.no_ask_dollars || 0);
+  return yes > 0.02 && yes < 0.98 && no > 0.02 && no < 0.98;
+}
+
 async function fetchSeries(ticker) {
   try {
     const params = new URLSearchParams({ series_ticker: ticker, limit: '200' });
@@ -26,6 +32,7 @@ async function fetchSeries(ticker) {
       !m.mve_collection_ticker &&
       m.market_type === 'binary' &&
       m.status === 'active' &&
+      hasExecutableTwoSidedAsk(m) &&
       (!m.expected_expiration_time || new Date(m.expected_expiration_time).getTime() > now)
     );
     return { markets };
