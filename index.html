@@ -244,8 +244,8 @@ const PLAT_CLS = {
   bet365:'pa-c', hardrock:'pa-c', tipico:'pa-c',
   stake:'pa-c', sugarhouse:'pa-c', prophetx:'pa-c'
 };
-const FILTERS  = ['all','mlb','nba','nfl','nhl','crypto','other'];
-const FILTER_LB = { all:'All', mlb:'MLB', nba:'NBA', nfl:'NFL', nhl:'NHL', crypto:'Crypto', other:'Other' };
+const FILTERS  = ['all','mlb','wnba','nba','nfl','ncaaf','ncaab','nhl','soccer','crypto','other'];
+const FILTER_LB = { all:'All', mlb:'MLB', wnba:'WNBA', nba:'NBA', nfl:'NFL', ncaaf:'NCAAF', ncaab:'NCAAB', nhl:'NHL', soccer:'Soccer', crypto:'Crypto', other:'Other' };
 const SOURCE_FILTERS = ['all','core','sportsbook','exchange'];
 const SOURCE_FILTER_LB = { all:'All', core:'Core only', sportsbook:'Sportsbook only', exchange:'Exchange only' };
 const MARKET_FILTERS = ['all','main','moneyline','spread','total'];
@@ -1537,6 +1537,20 @@ function cleanTeamName(fullName) {
     .replace(/\s+/g, ' ');
 }
 
+function genericCompetitorKey(fullName) {
+  const t = cleanTeamName(fullName);
+  if (!t) return null;
+  return t
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '')
+    .slice(0, 42) || null;
+}
+
+function canUseGenericParlayKey(sport) {
+  return ['wnba','ncaaf','ncaab','soccer'].includes(sport);
+}
+
 function teamNameToAbbr(fullName, sport = null) {
   const t = cleanTeamName(fullName);
   if (!t) return null;
@@ -1560,6 +1574,8 @@ function teamNameToAbbr(fullName, sport = null) {
   for (const w of words) {
     if (KALSHI_TEAM_NAMES[w]) return KALSHI_TEAM_NAMES[w];
   }
+
+  if (canUseGenericParlayKey(sport)) return genericCompetitorKey(t);
 
   return null;
 }

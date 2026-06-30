@@ -3,12 +3,30 @@
 const API_KEY = process.env.PARLAY_API_KEY;
 const BASE = 'https://parlay-api.com/v1';
 
-const SPORTS = [
+const CORE_SPORTS = [
   'baseball_mlb',
   'basketball_nba',
   'americanfootball_nfl',
   'icehockey_nhl'
 ];
+
+const EXPANDED_SPORTS = [
+  'basketball_wnba',
+  'americanfootball_ncaaf',
+  'basketball_ncaab'
+];
+
+const DEFAULT_SOCCER_SPORTS = [
+  'soccer_epl',
+  'soccer_spain_la_liga',
+  'soccer_italy_serie_a',
+  'soccer_germany_bundesliga',
+  'soccer_france_ligue_one',
+  'soccer_mexico_ligamx',
+  'soccer_fifa_world_cup'
+];
+
+const SPORTS = [...CORE_SPORTS, ...EXPANDED_SPORTS, ...DEFAULT_SOCCER_SPORTS];
 
 const FINAL_BOOK_KEYS = [
   'draftkings',
@@ -99,15 +117,10 @@ const SUPPORTED_EXCHANGE_CALLS = [
 ];
 
 const SUPPLEMENTAL_MLB_BOOK_CALLS = [
-  // Verified via /api/parlay-sources?auditProductionIssues=1 on 2026-06-23.
-  // Individual bookmaker calls return active MLB rows that the all-books call
-  // currently misses. Use all main-line markets only when the book returns them.
+  // Keep only supplemental calls that are currently productive. The all-books
+  // call still admits every approved book when ParlayAPI returns it.
   { bookmaker: 'fanduel', markets: 'h2h,spreads,totals' },
-  { bookmaker: 'betmgm', markets: 'h2h,spreads,totals' },
-  { bookmaker: 'caesars', markets: 'h2h,spreads,totals' },
-  { bookmaker: 'pinnacle', markets: 'h2h' },
-  { bookmaker: 'fanatics', markets: 'h2h,spreads,totals' },
-  { bookmaker: 'betrivers', markets: 'h2h,spreads,totals' }
+  { bookmaker: 'pinnacle', markets: 'h2h' }
 ];
 
 const SAFE_MLB_PROP_MARKETS = new Set([
@@ -253,9 +266,30 @@ function americanFromProbability(price) {
 function sportShort(sport) {
   if (sport === 'baseball_mlb') return 'mlb';
   if (sport === 'basketball_nba') return 'nba';
+  if (sport === 'basketball_wnba') return 'wnba';
   if (sport === 'americanfootball_nfl') return 'nfl';
+  if (sport === 'americanfootball_ncaaf') return 'ncaaf';
+  if (sport === 'basketball_ncaab') return 'ncaab';
   if (sport === 'icehockey_nhl') return 'nhl';
+  if (String(sport || '').startsWith('soccer_')) return 'soccer';
   return sport;
+}
+
+function configuredList(name, fallback) {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  return raw.split(',').map(v => v.trim()).filter(Boolean);
+}
+
+function maxCreditsPerRefresh() {
+  const raw = Number(process.env.PARLAY_MAX_CREDITS_PER_REFRESH || 30);
+  return Number.isFinite(raw) && raw > 0 ? raw : 30;
+}
+
+function estimatedCredits(call) {
+  if (call.kind === 'mlb_supplement' && call.markets === 'h2h') return 1;
+  if (call.kind === 'events' || call.kind === 'sports') return 0;
+  return 3;
 }
 
 function googleUrl(book, away, home) {
@@ -496,6 +530,10 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
       }
 
       if (key === 'h2h') {
+        if (outcomes.length !== 2) {
+          noteSkip(debug, `h2h_unsupported_outcome_count_${outcomes.length}`);
+          continue;
+        }
         const awayOut = outcomes.find(o => o.name === away);
         const homeOut = outcomes.find(o => o.name === home);
 
@@ -909,9 +947,103 @@ module.exports = async function handler(req, res) {
     const timeWindow = buildTimeWindow(req);
     const seenMarketKeys = new Set();
 
+    const soccerSports = configuredList('PARLAY_SOCCER_SPORTS', DEFAULT_SOCCER_SPORTS);
+    const expandedSports = configuredList('PARLAY_EXPANDED_SPORTS', EXPANDED_SPORTS);
+    const optionalSports = [...new Set([...expandedSports, ...soccerSports])];
+    const candidateSports = [...new Set([...CORE_SPORTS, ...optionalSports])];
+    const creditBudget = maxCreditsPerRefresh();
+    let activeSportKeys = [];
+    let eventPrecheckRows = {};
+    const planningDebug = {
+      candidateSports,
+      creditBudget,
+      includedSports: [],
+      skippedSports: [],
+      eventPrechecks: [],
+      skippedCallsForBudget: []
+    };
+
+    try {
+      const sportsResult = await fetchJson('/sports');
+      if (sportsResult.response.ok) {
+        const sportsRows = listFromPayload(sportsResult.json);
+        activeSportKeys = sportsRows.filter(row => row.active).map(row => row.key).filter(Boolean);
+      } else {
+        planningDebug.sportsPrecheckError = {
+          status: sportsResult.response.status,
+          body: sportsResult.text.slice(0, 400)
+        };
+      }
+    } catch (error) {
+      planningDebug.sportsPrecheckError = error.message || String(error);
+    }
+
+    const activeSportSet = new Set(activeSportKeys.length ? activeSportKeys : candidateSports);
+    const activeCandidates = candidateSports.filter(sport => activeSportSet.has(sport));
+    const eventPrechecks = await Promise.allSettled(activeCandidates.map(async sport => {
+      const result = await fetchJson(`/sports/${sport}/events`, {
+        commenceTimeFrom: timeWindow.commenceTimeFrom,
+        commenceTimeTo: timeWindow.commenceTimeTo
+      });
+      return { sport, result };
+    }));
+    for (const settled of eventPrechecks) {
+      if (settled.status !== 'fulfilled') {
+        planningDebug.eventPrechecks.push({
+          ok: false,
+          error: settled.reason?.message || String(settled.reason)
+        });
+        continue;
+      }
+      const { sport, result } = settled.value;
+      const rows = result.response.ok ? listFromPayload(result.json) : [];
+      eventPrecheckRows[sport] = rows.length;
+      planningDebug.eventPrechecks.push({
+        sport,
+        ok: result.response.ok,
+        status: result.response.status,
+        rows: rows.length,
+        responseMs: result.elapsedMs,
+        creditHeaders: creditHeaders(result.response.headers)
+      });
+    }
+
     const plannedCalls = [];
-    for (const sport of SPORTS) {
-      plannedCalls.push({
+    let plannedCreditEstimate = 0;
+    const maybeAddCall = (call) => {
+      const estimate = estimatedCredits(call);
+      if (plannedCreditEstimate + estimate > creditBudget) {
+        planningDebug.skippedCallsForBudget.push({
+          kind: call.kind,
+          sport: call.sport,
+          endpoint: call.endpoint,
+          bookmaker: call.bookmaker,
+          exchange: call.exchange,
+          estimatedCredits: estimate,
+          plannedCreditEstimate,
+          creditBudget
+        });
+        return false;
+      }
+      plannedCreditEstimate += estimate;
+      plannedCalls.push({ ...call, estimatedCredits: estimate });
+      return true;
+    };
+
+    const maybeAddSportOddsCall = (sport) => {
+      if (!activeSportSet.has(sport)) {
+        planningDebug.skippedSports.push({ sport, reason: 'not_active_in_v1_sports' });
+        return false;
+      }
+      if (eventPrecheckRows[sport] === 0) {
+        planningDebug.skippedSports.push({ sport, reason: 'no_events_in_lookahead_window' });
+        return false;
+      }
+      if (eventPrecheckRows[sport] == null && !CORE_SPORTS.includes(sport)) {
+        planningDebug.skippedSports.push({ sport, reason: 'event_precheck_unavailable_for_optional_sport' });
+        return false;
+      }
+      const added = maybeAddCall({
         kind: 'odds',
         sport,
         endpoint: `/sports/${sport}/odds`,
@@ -923,9 +1055,16 @@ module.exports = async function handler(req, res) {
           commenceTimeTo: timeWindow.commenceTimeTo
         }
       });
+      if (added) planningDebug.includedSports.push({ sport, eventPrecheckRows: eventPrecheckRows[sport] ?? null });
+      return added;
+    };
+
+    for (const sport of CORE_SPORTS) {
+      maybeAddSportOddsCall(sport);
     }
     for (const call of SUPPLEMENTAL_MLB_BOOK_CALLS) {
-      plannedCalls.push({
+      if (!planningDebug.includedSports.some(row => row.sport === 'baseball_mlb')) continue;
+      maybeAddCall({
         kind: 'mlb_supplement',
         sport: 'baseball_mlb',
         endpoint: '/sports/baseball_mlb/odds',
@@ -941,7 +1080,8 @@ module.exports = async function handler(req, res) {
       });
     }
     for (const call of SUPPORTED_EXCHANGE_CALLS) {
-      plannedCalls.push({
+      if (eventPrecheckRows[call.sport] === 0) continue;
+      maybeAddCall({
         kind: 'exchange',
         sport: call.sport,
         endpoint: `/exchange/${call.sport}/markets`,
@@ -949,8 +1089,11 @@ module.exports = async function handler(req, res) {
         params: { exchange: call.exchange }
       });
     }
+    for (const sport of optionalSports) {
+      maybeAddSportOddsCall(sport);
+    }
     if (includeProps) {
-      plannedCalls.push({
+      maybeAddCall({
         kind: 'props',
         sport: 'baseball_mlb',
         endpoint: '/sports/baseball_mlb/props',
@@ -961,6 +1104,7 @@ module.exports = async function handler(req, res) {
         }
       });
     }
+    planningDebug.plannedCreditEstimate = plannedCreditEstimate;
 
     const settledCalls = await Promise.allSettled(plannedCalls.map(async call => {
       try {
@@ -1136,6 +1280,7 @@ module.exports = async function handler(req, res) {
         oddsCommenceTimeFiltering: 'upstream_and_server_side',
         exchangeCommenceTimeFiltering: 'server_side_only'
       },
+      sportPlanning: planningDebug,
       supportedExchangeCalls: SUPPORTED_EXCHANGE_CALLS,
       includeProps,
       cacheStatus: forceFresh ? 'fresh' : 'vercel-cache-eligible',

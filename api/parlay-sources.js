@@ -4,12 +4,30 @@
 const API_KEY = process.env.PARLAY_API_KEY;
 const BASE = 'https://parlay-api.com/v1';
 
-const SPORTS = [
+const CORE_SPORTS = [
   'baseball_mlb',
   'basketball_nba',
   'americanfootball_nfl',
   'icehockey_nhl'
 ];
+
+const EXPANDED_SPORTS = [
+  'basketball_wnba',
+  'americanfootball_ncaaf',
+  'basketball_ncaab'
+];
+
+const DEFAULT_SOCCER_SPORTS = [
+  'soccer_epl',
+  'soccer_spain_la_liga',
+  'soccer_italy_serie_a',
+  'soccer_germany_bundesliga',
+  'soccer_france_ligue_one',
+  'soccer_mexico_ligamx',
+  'soccer_fifa_world_cup'
+];
+
+const SPORTS = [...CORE_SPORTS, ...EXPANDED_SPORTS, ...DEFAULT_SOCCER_SPORTS];
 
 const FINAL_BOOK_KEYS = [
   'draftkings',
@@ -58,9 +76,16 @@ const SUPPORTED_EXCHANGE_CALLS = [
 ];
 
 const EXPANSION_CANDIDATE_SPORTS = [
-  { key: 'basketball_wnba', label: 'WNBA', matcher: 'team sport; needs team map if ParlayAPI exposes home_team/away_team' },
-  { key: 'americanfootball_ncaaf', label: 'NCAAF', matcher: 'team sport; needs college team normalization' },
-  { key: 'basketball_ncaab', label: 'NCAAB', matcher: 'team sport; needs college team normalization' },
+  { key: 'basketball_wnba', label: 'WNBA', matcher: 'team sport; Parlay-only generic game keys are supported' },
+  { key: 'americanfootball_ncaaf', label: 'NCAAF', matcher: 'team sport; Parlay-only generic game keys are supported' },
+  { key: 'basketball_ncaab', label: 'NCAAB', matcher: 'team sport; Parlay-only generic game keys are supported' },
+  { key: 'soccer_epl', label: 'EPL', matcher: 'soccer; two-sided spreads/totals only, three-way h2h must be skipped' },
+  { key: 'soccer_spain_la_liga', label: 'La Liga', matcher: 'soccer; two-sided spreads/totals only, three-way h2h must be skipped' },
+  { key: 'soccer_italy_serie_a', label: 'Serie A', matcher: 'soccer; two-sided spreads/totals only, three-way h2h must be skipped' },
+  { key: 'soccer_germany_bundesliga', label: 'Bundesliga', matcher: 'soccer; two-sided spreads/totals only, three-way h2h must be skipped' },
+  { key: 'soccer_france_ligue_one', label: 'Ligue 1', matcher: 'soccer; two-sided spreads/totals only, three-way h2h must be skipped' },
+  { key: 'soccer_mexico_ligamx', label: 'Liga MX', matcher: 'soccer; two-sided spreads/totals only, three-way h2h must be skipped' },
+  { key: 'soccer_fifa_world_cup', label: 'FIFA World Cup', matcher: 'soccer; two-sided spreads/totals only, three-way h2h must be skipped' },
   { key: 'mma_mixed_martial_arts', label: 'UFC/MMA', matcher: 'fighter-vs-fighter; needs non-team matcher verification' },
   { key: 'tennis', label: 'Tennis', matcher: 'player-vs-player; needs non-team matcher verification' },
   { key: 'tennis_atp', label: 'ATP Tennis', matcher: 'player-vs-player; needs non-team matcher verification' },
@@ -69,9 +94,6 @@ const EXPANSION_CANDIDATE_SPORTS = [
 ];
 
 const SPORT_EXCLUSION_REASONS = {
-  basketball_wnba: 'not enabled yet; team normalization and active event coverage need scanner verification',
-  americanfootball_ncaaf: 'seasonal; not enabled until current events can be verified without adding dead calls',
-  basketball_ncaab: 'seasonal; not enabled until current events can be verified without adding dead calls',
   mma_mixed_martial_arts: 'not enabled; fighter-vs-fighter normalization needs explicit matcher support',
   tennis_atp: 'not enabled; player-vs-player normalization needs explicit matcher support',
   tennis_wta: 'not enabled; player-vs-player normalization needs explicit matcher support'
@@ -487,7 +509,7 @@ function excludedActiveSports(sportsRows) {
     .map(row => ({
       key: row.key,
       title: row.title || row.name || row.key,
-      reason: SPORT_EXCLUSION_REASONS[row.key] || 'not enabled; current matcher is verified only for MLB/NBA/NFL/NHL team games'
+      reason: SPORT_EXCLUSION_REASONS[row.key] || 'not enabled; not in the current credit-budgeted two-sided main-line sport set'
     }))
     .sort((a, b) => a.key.localeCompare(b.key));
 }
