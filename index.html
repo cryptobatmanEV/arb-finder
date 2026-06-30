@@ -923,6 +923,8 @@ function extractKalshiStructure(m) {
     const dateM2 = gameKey.match(/(\d{4}-\d{2}-\d{2})$/);
     gameDate = dateM2 ? dateM2[1] : null;
     startTime = kalshiStartTimeFromRules(m.rules_primary) || m.occurrence_datetime || kalshiStartTimeFromTicker(ticker);
+    const expiryMs = new Date(m.expected_expiration_time || m.expiration_time || '').getTime();
+    if (Number.isFinite(expiryMs) && expiryMs <= Date.now()) return null;
     if (hasGameStarted(startTime)) return null;
   }
 

@@ -21,10 +21,12 @@ async function fetchSeries(ticker) {
     if (res.status === 429) return { markets: [], rateLimited: true };
     if (!res.ok) return { markets: [], error: res.status };
     const data = await res.json();
+    const now = Date.now();
     const markets = (data.markets || []).filter(m =>
       !m.mve_collection_ticker &&
       m.market_type === 'binary' &&
-      m.status === 'active'
+      m.status === 'active' &&
+      (!m.expected_expiration_time || new Date(m.expected_expiration_time).getTime() > now)
     );
     return { markets };
   } catch { return { markets: [] }; }
