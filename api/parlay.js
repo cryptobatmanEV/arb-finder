@@ -116,18 +116,7 @@ const SUPPORTED_EXCHANGE_CALLS = [
   { exchange: 'prophetx', sport: 'baseball_mlb' }
 ];
 
-const SUPPLEMENTAL_MLB_BOOK_CALLS = [
-  // Verified productive via /api/parlay-sources?auditProductionIssues=1 on 2026-06-30.
-  // The MLB all-books + regions request currently returns 0 upstream events, so
-  // MLB coverage comes from exact bookmaker calls instead.
-  { bookmaker: 'fanduel', markets: 'h2h,spreads,totals' },
-  { bookmaker: 'betmgm', markets: 'h2h,spreads,totals' },
-  { bookmaker: 'caesars', markets: 'h2h,spreads,totals' },
-  { bookmaker: 'bovada', markets: 'h2h,spreads,totals' },
-  { bookmaker: 'fanatics', markets: 'h2h,spreads,totals' },
-  { bookmaker: 'betrivers', markets: 'h2h,spreads,totals' },
-  { bookmaker: 'pinnacle', markets: 'h2h' }
-];
+const SUPPLEMENTAL_MLB_BOOK_CALLS = [];
 
 const SAFE_MLB_PROP_MARKETS = new Set([
   'player_hits',
@@ -288,8 +277,8 @@ function configuredList(name, fallback) {
 }
 
 function maxCreditsPerRefresh() {
-  const raw = Number(process.env.PARLAY_MAX_CREDITS_PER_REFRESH || 36);
-  return Number.isFinite(raw) && raw > 0 ? raw : 36;
+  const raw = Number(process.env.PARLAY_MAX_CREDITS_PER_REFRESH || 30);
+  return Number.isFinite(raw) && raw > 0 ? raw : 30;
 }
 
 function estimatedCredits(call) {
@@ -1048,14 +1037,6 @@ module.exports = async function handler(req, res) {
       if (eventPrecheckRows[sport] == null && !CORE_SPORTS.includes(sport)) {
         planningDebug.skippedSports.push({ sport, reason: 'event_precheck_unavailable_for_optional_sport' });
         return false;
-      }
-      if (sport === 'baseball_mlb') {
-        planningDebug.includedSports.push({
-          sport,
-          eventPrecheckRows: eventPrecheckRows[sport] ?? null,
-          mode: 'verified_individual_bookmaker_calls'
-        });
-        return true;
       }
       const added = maybeAddCall({
         kind: 'odds',
