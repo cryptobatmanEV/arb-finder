@@ -110,6 +110,8 @@ const EXCHANGE_TITLES = {
   prophetx: 'ProphetX'
 };
 
+const CORE_DUPLICATE_PARLAY_BOOK_SET = new Set(['kalshi', 'polymarket']);
+
 const SUPPORTED_EXCHANGE_CALLS = [
   // Verified useful on 2026-06-23:
   // /v1/exchange/baseball_mlb/markets?exchange=prophetx returns MLB game totals.
@@ -206,6 +208,15 @@ function staleSportsbookRow(platform, book, market, meta) {
   if (!SPORTSBOOK_BOOK_SET.has(platform)) return false;
   const age = lastUpdateAgeSeconds(book, market, meta?.fetchTimestamp);
   return age != null && age > MAX_LAST_UPDATE_AGE_SECONDS;
+}
+
+function unsupportedMainLine(sport, marketType, line) {
+  const shortSport = sportShort(sport);
+  const n = Number(line);
+  if (!Number.isFinite(n)) return false;
+  if (shortSport === 'mlb' && marketType === 'spread') return Math.abs(n) !== 1.5;
+  if (shortSport === 'mlb' && marketType === 'total') return n < 5 || n > 13.5;
+  return false;
 }
 
 function requestPath(endpoint, params = {}) {
@@ -502,6 +513,10 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
       noteSkip(debug, `excluded_book_${platform}`);
       continue;
     }
+    if (CORE_DUPLICATE_PARLAY_BOOK_SET.has(platform)) {
+      noteSkip(debug, `core_duplicate_parlay_book_${platform}`);
+      continue;
+    }
     if (!FINAL_BOOK_SET.has(platform)) {
       noteSkip(debug, `unsupported_book_${platform}`);
       continue;
@@ -579,6 +594,10 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
           noteSkip(debug, 'total_missing_prices_or_line');
           continue;
         }
+        if (unsupportedMainLine(sport, 'total', point)) {
+          noteSkip(debug, `unsupported_main_total_line_${sportShort(sport)}_${point}`);
+          continue;
+        }
         if (invalidSportsbookHold(platform, yesPrice, noPrice)) {
           noteSkip(debug, `sportsbook_total_invalid_same_book_hold_${platform}`);
           continue;
@@ -626,6 +645,10 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
         }
         if (Math.abs(awayPoint + homePoint) > 0.001) {
           noteSkip(debug, 'spread_points_not_opposing');
+          continue;
+        }
+        if (unsupportedMainLine(sport, 'spread', Math.abs(awayPoint))) {
+          noteSkip(debug, `unsupported_main_spread_line_${sportShort(sport)}_${Math.abs(awayPoint)}`);
           continue;
         }
 
