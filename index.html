@@ -2872,16 +2872,15 @@ function App() {
 
   const refresh = useCallback(async () => {
     setLoading(true);
-    setStatus(prev => ({ ...prev, polymarket:'loading', kalshi:'loading', novig:'loading', fliff:'loading' }));
+    setStatus(prev => ({ ...prev, polymarket:'loading', kalshi:'loading', novig:'legacy', fliff:'loading' }));
 
     const mkts = { polymarket:[], kalshi:[], novig:[], fliff:[], parlay: parlayRef.current || [] };
-    const stat = { polymarket:'idle', kalshi:'idle', novig:'idle', fliff:'idle', parlay: status.parlay || 'idle' };
+    const stat = { polymarket:'idle', kalshi:'idle', novig:'legacy', fliff:'idle', parlay: status.parlay || 'idle' };
     const errs = {};
 
     await Promise.all([
       fetchPolymarket().then(d => { mkts.polymarket = d; stat.polymarket = 'ok'; }).catch(e => { stat.polymarket = 'error'; errs.polymarket = e.message; }),
       fetchKalshi().then(d => { mkts.kalshi = d; stat.kalshi = 'ok'; }).catch(e => { stat.kalshi = 'error'; errs.kalshi = e.message; }),
-      fetchNovig().then(d => { mkts.novig = d; stat.novig = 'ok'; }).catch(e => { stat.novig = 'error'; errs.novig = e.message; }),
       fetchFliff().then(d => { mkts.fliff = d; stat.fliff = 'ok'; }).catch(e => { stat.fliff = 'error'; errs.fliff = e.message; }),
     ]);
 
