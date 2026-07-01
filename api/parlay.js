@@ -252,6 +252,7 @@ function mainLineContext(ev, sport) {
 
 function unsupportedEventLine(context, sport, marketType, line) {
   if (sportShort(sport) === 'mlb' && marketType === 'total') {
+    if (context?.mlbMainTotalLine == null) return false;
     const main = Number(context?.mlbMainTotalLine);
     const n = Number(line);
     return Number.isFinite(main) && Number.isFinite(n) && Math.abs(main - n) > 0.001;
