@@ -119,7 +119,15 @@ const SUPPORTED_EXCHANGE_CALLS = [
   { exchange: 'prophetx', sport: 'baseball_mlb' }
 ];
 
-const SUPPLEMENTAL_MLB_BOOK_CALLS = [];
+const DEFAULT_MLB_SUPPLEMENT_BOOKS = [
+  'betmgm',
+  'caesars',
+  'bovada',
+  'pinnacle',
+  'fanatics',
+  'betrivers'
+];
+const SUPPLEMENTAL_MLB_MARKETS = process.env.PARLAY_MLB_SUPPLEMENT_MARKETS || 'h2h,spreads,totals';
 
 const SAFE_MLB_PROP_MARKETS = new Set([
   'player_hits',
@@ -317,6 +325,12 @@ function configuredList(name, fallback) {
   const raw = process.env[name];
   if (!raw) return fallback;
   return raw.split(',').map(v => v.trim()).filter(Boolean);
+}
+
+function supplementalMlbBooks() {
+  return configuredList('PARLAY_MLB_SUPPLEMENT_BOOKS', DEFAULT_MLB_SUPPLEMENT_BOOKS)
+    .map(normalizeBookKey)
+    .filter(book => book && FINAL_BOOK_SET.has(book) && !REMOVED_BOOK_SET.has(book));
 }
 
 function maxCreditsPerRefresh() {
@@ -1117,22 +1131,8 @@ module.exports = async function handler(req, res) {
     for (const sport of CORE_SPORTS) {
       maybeAddSportOddsCall(sport);
     }
-    for (const call of SUPPLEMENTAL_MLB_BOOK_CALLS) {
-      if (!planningDebug.includedSports.some(row => row.sport === 'baseball_mlb')) continue;
-      maybeAddCall({
-        kind: 'mlb_supplement',
-        sport: 'baseball_mlb',
-        endpoint: '/sports/baseball_mlb/odds',
-        bookmaker: call.bookmaker,
-        markets: call.markets,
-        params: {
-          bookmakers: call.bookmaker,
-          markets: call.markets,
-          oddsFormat: 'american',
-          commenceTimeFrom: timeWindow.commenceTimeFrom,
-          commenceTimeTo: timeWindow.commenceTimeTo
-        }
-      });
+    for (const sport of optionalSports) {
+      maybeAddSportOddsCall(sport);
     }
     for (const call of SUPPORTED_EXCHANGE_CALLS) {
       if (eventPrecheckRows[call.sport] === 0) continue;
@@ -1144,8 +1144,22 @@ module.exports = async function handler(req, res) {
         params: { exchange: call.exchange }
       });
     }
-    for (const sport of optionalSports) {
-      maybeAddSportOddsCall(sport);
+    for (const bookmaker of supplementalMlbBooks()) {
+      if (!planningDebug.includedSports.some(row => row.sport === 'baseball_mlb')) continue;
+      maybeAddCall({
+        kind: 'mlb_supplement',
+        sport: 'baseball_mlb',
+        endpoint: '/sports/baseball_mlb/odds',
+        bookmaker,
+        markets: SUPPLEMENTAL_MLB_MARKETS,
+        params: {
+          bookmakers: bookmaker,
+          markets: SUPPLEMENTAL_MLB_MARKETS,
+          oddsFormat: 'american',
+          commenceTimeFrom: timeWindow.commenceTimeFrom,
+          commenceTimeTo: timeWindow.commenceTimeTo
+        }
+      });
     }
     if (includeProps) {
       maybeAddCall({

@@ -250,6 +250,7 @@ const SOURCE_FILTERS = ['all','core','sportsbook','exchange'];
 const SOURCE_FILTER_LB = { all:'All', core:'Core only', sportsbook:'Sportsbook only', exchange:'Exchange only' };
 const MARKET_FILTERS = ['all','main','moneyline','spread','total'];
 const MARKET_FILTER_LB = { all:'All', main:'Main Lines', moneyline:'Moneyline', spread:'Spread', total:'Total' };
+const BOARD_SPORTS = new Set(['mlb','wnba','nba','nfl','ncaaf','ncaab','nhl','soccer']);
 
 // ─── TEAM NORMALIZATION ───────────────────────────────────────────────────────
 const TEAM_MAP = {
@@ -2796,7 +2797,7 @@ function App() {
 
   const recalc = useCallback((mkts) => {
     const allStructured = [...mkts.polymarket, ...mkts.kalshi, ...mkts.novig, ...mkts.fliff, ...mkts.parlay];
-    const canonicalBoard = canonicalBoardRows(allStructured).filter(row => row.sport === 'mlb');
+    const canonicalBoard = canonicalBoardRows(allStructured).filter(row => BOARD_SPORTS.has(row.sport));
     const boardResult = boardRowsToOpportunities(canonicalBoard);
     const boardOpps = boardResult.opportunities;
     const matched = matchMarkets(allStructured);
