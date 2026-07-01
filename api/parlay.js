@@ -111,6 +111,7 @@ const EXCHANGE_TITLES = {
 };
 
 const CORE_DUPLICATE_PARLAY_BOOK_SET = new Set(['kalshi', 'polymarket']);
+const MLB_MAIN_TOTAL_ANCHOR_BOOKS = ['pinnacle', 'draftkings', 'novig', 'betmgm', 'caesars', 'bovada', 'fanduel'];
 
 const SUPPORTED_EXCHANGE_CALLS = [
   // Verified useful on 2026-06-23:
@@ -216,6 +217,37 @@ function unsupportedMainLine(sport, marketType, line) {
   if (!Number.isFinite(n)) return false;
   if (shortSport === 'mlb' && marketType === 'spread') return Math.abs(n) !== 1.5;
   if (shortSport === 'mlb' && marketType === 'total') return n < 5 || n > 13.5;
+  return false;
+}
+
+function firstTotalLineForBook(ev, bookKey, sport) {
+  const book = (ev.bookmakers || []).find(row => normalizeBookKey(row.key) === bookKey);
+  if (!book || CORE_DUPLICATE_PARLAY_BOOK_SET.has(bookKey) || REMOVED_BOOK_SET.has(bookKey)) return null;
+  for (const market of book.markets || []) {
+    if (market.key !== 'totals') continue;
+    const over = (market.outcomes || []).find(o => /over/i.test(o.name));
+    const under = (market.outcomes || []).find(o => /under/i.test(o.name));
+    const point = Number(over?.point ?? under?.point);
+    if (Number.isFinite(point) && !unsupportedMainLine(sport, 'total', point)) return point;
+  }
+  return null;
+}
+
+function mainLineContext(ev, sport) {
+  const shortSport = sportShort(sport);
+  if (shortSport !== 'mlb') return {};
+  const anchorLine = MLB_MAIN_TOTAL_ANCHOR_BOOKS
+    .map(book => firstTotalLineForBook(ev, book, sport))
+    .find(line => Number.isFinite(line));
+  return { mlbMainTotalLine: anchorLine ?? null };
+}
+
+function unsupportedEventLine(context, sport, marketType, line) {
+  if (sportShort(sport) === 'mlb' && marketType === 'total') {
+    const main = Number(context?.mlbMainTotalLine);
+    const n = Number(line);
+    return Number.isFinite(main) && Number.isFinite(n) && Math.abs(main - n) > 0.001;
+  }
   return false;
 }
 
@@ -496,6 +528,7 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
   const home = ev.home_team;
   const away = ev.away_team;
   const startTime = ev.commence_time;
+  const lineContext = mainLineContext(ev, sport);
 
   if (!home || !away) {
     noteSkip(debug, 'missing_teams');
@@ -596,6 +629,10 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
         }
         if (unsupportedMainLine(sport, 'total', point)) {
           noteSkip(debug, `unsupported_main_total_line_${sportShort(sport)}_${point}`);
+          continue;
+        }
+        if (unsupportedEventLine(lineContext, sport, 'total', point)) {
+          noteSkip(debug, `non_anchor_total_line_${sportShort(sport)}_${point}_main_${lineContext.mlbMainTotalLine}`);
           continue;
         }
         if (invalidSportsbookHold(platform, yesPrice, noPrice)) {
