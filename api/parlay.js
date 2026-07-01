@@ -753,96 +753,186 @@ function normalizeExchangeMarket(exchangeKey, m, sport, debug, meta = {}) {
     return null;
   }
 
+  const overPrice = implied(m.over_price);
+  const underPrice = implied(m.under_price);
+
+  if (marketType === 'moneyline' && marketKey === 'moneyline') {
+    if (!overPrice || !underPrice) {
+      noteSkip(debug, 'exchange_moneyline_missing_prices');
+      return null;
+    }
+
+    return {
+      id: `${platform}-${sport}-${away}-${home}-${startTime}-moneyline`,
+      source: 'parlay',
+      platform,
+      bookTitle,
+      trustStatus: 'trusted_live',
+      sport: sportShort(sport),
+      marketType: 'moneyline',
+      home,
+      away,
+      startTime,
+      yesPrice: underPrice,
+      noPrice: overPrice,
+      rawYesPrice: underPrice,
+      rawNoPrice: overPrice,
+      sourceProof: {
+        YES: {
+          sourceEndpoint: meta?.endpoint || null,
+          sourceRequest: meta?.requestPath || null,
+          rawEventId: m.event_id || m.id || m.key || null,
+          rawBookmakerKey: platform,
+          rawBookmakerTitle: bookTitle,
+          rawMarketKey: m.market_key || null,
+          normalizedMarketType: 'moneyline',
+          rawOutcomeName: away,
+          rawOutcomePrice: m.under_price ?? null,
+          rawOutcomePoint: null,
+          normalizedSide: `${away} wins`,
+          normalizedAmerican: americanFromProbability(underPrice),
+          rawCommenceTime: startTime,
+          displayedDate: String(startTime || '').slice(0, 10),
+          lastUpdate: m.last_update || null,
+          fetchTimestamp: meta?.fetchTimestamp || null,
+          cacheStatus: 'fresh',
+          rawHomeTeam: home,
+          rawAwayTeam: away
+        },
+        NO: {
+          sourceEndpoint: meta?.endpoint || null,
+          sourceRequest: meta?.requestPath || null,
+          rawEventId: m.event_id || m.id || m.key || null,
+          rawBookmakerKey: platform,
+          rawBookmakerTitle: bookTitle,
+          rawMarketKey: m.market_key || null,
+          normalizedMarketType: 'moneyline',
+          rawOutcomeName: home,
+          rawOutcomePrice: m.over_price ?? null,
+          rawOutcomePoint: null,
+          normalizedSide: `${home} wins`,
+          normalizedAmerican: americanFromProbability(overPrice),
+          rawCommenceTime: startTime,
+          displayedDate: String(startTime || '').slice(0, 10),
+          lastUpdate: m.last_update || null,
+          fetchTimestamp: meta?.fetchTimestamp || null,
+          cacheStatus: 'fresh',
+          rawHomeTeam: home,
+          rawAwayTeam: away
+        }
+      },
+      rawTitle: `${away} vs ${home}`,
+      noTitle: `${away} vs ${home}`,
+      exchangeMarketType: m.market_type || null,
+      exchangeLastUpdate: m.last_update || null,
+      exchangeVolumeUsd: m.volume_usd ?? null,
+      url: googleUrl(bookTitle, away, home)
+    };
+  }
+
+  if (marketType === 'run line' && marketKey === 'spreads') {
+    const homePoint = Number(line);
+    if (!Number.isFinite(homePoint) || !overPrice || !underPrice) {
+      noteSkip(debug, 'exchange_spread_missing_prices_or_line');
+      return null;
+    }
+    const awayPoint = -homePoint;
+    if (Math.abs(awayPoint + homePoint) > 0.001) {
+      noteSkip(debug, 'exchange_spread_points_not_opposing');
+      return null;
+    }
+    if (unsupportedMainLine(sport, 'spread', Math.abs(homePoint))) {
+      noteSkip(debug, `exchange_unsupported_main_spread_line_${sportShort(sport)}_${Math.abs(homePoint)}`);
+      return null;
+    }
+
+    return {
+      id: `${platform}-${sport}-${away}-${home}-${startTime}-spread-${Math.abs(homePoint)}`,
+      source: 'parlay',
+      platform,
+      bookTitle,
+      trustStatus: 'trusted_live',
+      sport: sportShort(sport),
+      marketType: 'spread',
+      home,
+      away,
+      startTime,
+      line: Math.abs(homePoint),
+      yesPrice: underPrice,
+      noPrice: overPrice,
+      rawYesPrice: underPrice,
+      rawNoPrice: overPrice,
+      sourceProof: {
+        YES: {
+          sourceEndpoint: meta?.endpoint || null,
+          sourceRequest: meta?.requestPath || null,
+          rawEventId: m.event_id || m.id || m.key || null,
+          rawBookmakerKey: platform,
+          rawBookmakerTitle: bookTitle,
+          rawMarketKey: m.market_key || null,
+          normalizedMarketType: 'spread',
+          rawOutcomeName: away,
+          rawOutcomePrice: m.under_price ?? null,
+          rawOutcomePoint: awayPoint,
+          normalizedSide: `${away} ${awayPoint > 0 ? '+' : ''}${awayPoint}`,
+          normalizedAmerican: americanFromProbability(underPrice),
+          rawCommenceTime: startTime,
+          displayedDate: String(startTime || '').slice(0, 10),
+          lastUpdate: m.last_update || null,
+          fetchTimestamp: meta?.fetchTimestamp || null,
+          cacheStatus: 'fresh',
+          rawHomeTeam: home,
+          rawAwayTeam: away
+        },
+        NO: {
+          sourceEndpoint: meta?.endpoint || null,
+          sourceRequest: meta?.requestPath || null,
+          rawEventId: m.event_id || m.id || m.key || null,
+          rawBookmakerKey: platform,
+          rawBookmakerTitle: bookTitle,
+          rawMarketKey: m.market_key || null,
+          normalizedMarketType: 'spread',
+          rawOutcomeName: home,
+          rawOutcomePrice: m.over_price ?? null,
+          rawOutcomePoint: homePoint,
+          normalizedSide: `${home} ${homePoint > 0 ? '+' : ''}${homePoint}`,
+          normalizedAmerican: americanFromProbability(overPrice),
+          rawCommenceTime: startTime,
+          displayedDate: String(startTime || '').slice(0, 10),
+          lastUpdate: m.last_update || null,
+          fetchTimestamp: meta?.fetchTimestamp || null,
+          cacheStatus: 'fresh',
+          rawHomeTeam: home,
+          rawAwayTeam: away
+        }
+      },
+      rawTitle: `Spread: ${away} (${awayPoint > 0 ? '+' : ''}${awayPoint})`,
+      noTitle: `Spread: ${home} (${homePoint > 0 ? '+' : ''}${homePoint})`,
+      spreadSides: {
+        YES: { team: away, point: awayPoint, rawPrice: m.under_price ?? null },
+        NO: { team: home, point: homePoint, rawPrice: m.over_price ?? null }
+      },
+      exchangeMarketType: m.market_type || null,
+      exchangeLastUpdate: m.last_update || null,
+      exchangeVolumeUsd: m.volume_usd ?? null,
+      url: googleUrl(bookTitle, away, home)
+    };
+  }
+
   if (marketType !== 'runs') {
     noteSkip(debug, 'exchange_unsupported_market_type');
     return null;
   }
 
-  // ProphetX currently returns market_type "Runs" with market_key "player_runs".
-  // That is not a verified game total, even though the row has home/away teams.
+  // ProphetX often returns player props or derivative markets with generic keys.
+  // Do not map those into game totals until the market_type is explicitly safe.
   if (!['totals', 'total', 'game_total', 'game_totals'].includes(marketKey)) {
     noteSkip(debug, `exchange_unsupported_market_key_${marketKey || 'missing'}`);
     return null;
   }
 
-  const overPrice = implied(m.over_price);
-  const underPrice = implied(m.under_price);
-
-  if (line == null || !overPrice || !underPrice) {
-    noteSkip(debug, 'exchange_missing_prices_or_line');
-    return null;
-  }
-
-  return {
-    id: `${platform}-${sport}-${away}-${home}-${startTime}-total-${line}`,
-    source: 'parlay',
-    platform,
-          bookTitle,
-          trustStatus: SPORTSBOOK_BOOK_SET.has(platform) ? 'trusted_live' : 'trusted_live',
-          sport: sportShort(sport),
-    marketType: 'total',
-    home,
-    away,
-    startTime,
-    line: Number(line),
-    yesPrice: overPrice,
-    noPrice: underPrice,
-    rawYesPrice: overPrice,
-    rawNoPrice: underPrice,
-    sourceProof: {
-      YES: {
-        sourceEndpoint: meta?.endpoint || null,
-        sourceRequest: meta?.requestPath || null,
-        rawEventId: m.event_id || m.id || m.key || null,
-        rawBookmakerKey: platform,
-        rawBookmakerTitle: bookTitle,
-        rawMarketKey: m.market_key || null,
-        rawOutcomeName: 'Over',
-        rawOutcomePrice: m.over_price ?? null,
-        rawOutcomePoint: line,
-        normalizedSide: `Over ${line}`,
-        normalizedAmerican: americanFromProbability(overPrice),
-        rawCommenceTime: startTime,
-        displayedDate: String(startTime || '').slice(0, 10),
-        lastUpdate: m.last_update || null,
-        fetchTimestamp: meta?.fetchTimestamp || null,
-        cacheStatus: 'fresh',
-        rawHomeTeam: home,
-        rawAwayTeam: away
-      },
-      NO: {
-        sourceEndpoint: meta?.endpoint || null,
-        sourceRequest: meta?.requestPath || null,
-        rawEventId: m.event_id || m.id || m.key || null,
-        rawBookmakerKey: platform,
-        rawBookmakerTitle: bookTitle,
-        rawMarketKey: m.market_key || null,
-        rawOutcomeName: 'Under',
-        rawOutcomePrice: m.under_price ?? null,
-        rawOutcomePoint: line,
-        normalizedSide: `Under ${line}`,
-        normalizedAmerican: americanFromProbability(underPrice),
-        rawCommenceTime: startTime,
-        displayedDate: String(startTime || '').slice(0, 10),
-        lastUpdate: m.last_update || null,
-        fetchTimestamp: meta?.fetchTimestamp || null,
-        cacheStatus: 'fresh',
-        rawHomeTeam: home,
-        rawAwayTeam: away
-      }
-    },
-    rawOverPrice: m.over_price ?? null,
-    rawUnderPrice: m.under_price ?? null,
-    overAmerican: americanFromProbability(overPrice),
-    underAmerican: americanFromProbability(underPrice),
-    marketKey: m.market_key || null,
-    exchangeMarketType: m.market_type || null,
-    exchangeLastUpdate: m.last_update || null,
-    exchangeVolumeUsd: m.volume_usd ?? null,
-    rawTitle: `${away} vs ${home}: O/U ${line}`,
-    noTitle: `${away} vs ${home}: O/U ${line}`,
-    url: googleUrl(bookTitle, away, home)
-  };
+  noteSkip(debug, `exchange_unsupported_market_type_${marketType}_${marketKey}`);
+  return null;
 }
 
 function normalizePropRow(row, sport, debug, meta = {}) {
