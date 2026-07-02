@@ -1139,7 +1139,10 @@ module.exports = async function handler(req, res) {
     }
 
     const activeSportSet = new Set(activeSportKeys.length ? activeSportKeys : candidateSports);
-    const activeCandidates = candidateSports.filter(sport => activeSportSet.has(sport));
+    // Parlay can mark a sport inactive in /sports while its /events and /odds
+    // endpoints still return current markets. Precheck every configured sport
+    // and let event availability decide optional coverage.
+    const activeCandidates = candidateSports;
     const eventPrechecks = await Promise.allSettled(activeCandidates.map(async sport => {
       const result = await fetchJson(`/sports/${sport}/events`, {
         commenceTimeFrom: timeWindow.commenceTimeFrom,
@@ -1191,12 +1194,16 @@ module.exports = async function handler(req, res) {
     };
 
     const maybeAddSportOddsCall = (sport) => {
-      if (!activeSportSet.has(sport)) {
+      const activeInSports = activeSportSet.has(sport);
+      if (!activeInSports && eventPrecheckRows[sport] == null) {
         planningDebug.skippedSports.push({ sport, reason: 'not_active_in_v1_sports' });
         return false;
       }
       if (eventPrecheckRows[sport] === 0) {
-        planningDebug.skippedSports.push({ sport, reason: 'no_events_in_lookahead_window' });
+        planningDebug.skippedSports.push({
+          sport,
+          reason: activeInSports ? 'no_events_in_lookahead_window' : 'not_active_in_v1_sports_and_no_events_in_lookahead_window'
+        });
         return false;
       }
       if (eventPrecheckRows[sport] == null && !CORE_SPORTS.includes(sport)) {
@@ -1215,7 +1222,13 @@ module.exports = async function handler(req, res) {
           commenceTimeTo: timeWindow.commenceTimeTo
         }
       });
-      if (added) planningDebug.includedSports.push({ sport, eventPrecheckRows: eventPrecheckRows[sport] ?? null });
+      if (added) {
+        planningDebug.includedSports.push({
+          sport,
+          eventPrecheckRows: eventPrecheckRows[sport] ?? null,
+          activeInSports
+        });
+      }
       return added;
     };
 
