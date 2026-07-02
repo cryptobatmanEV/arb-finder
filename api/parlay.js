@@ -130,6 +130,7 @@ const DEFAULT_MLB_SUPPLEMENT_BOOKS = [
 ];
 const SUPPLEMENTAL_MLB_MARKETS = process.env.PARLAY_MLB_SUPPLEMENT_MARKETS || 'h2h,spreads,totals';
 const MLB_ALL_BOOKS_ODDS_ENABLED = process.env.PARLAY_MLB_ALL_BOOKS_ODDS === '1';
+const LOW_PRIORITY_CORE_SPORTS = new Set(['icehockey_nhl']);
 
 const SAFE_MLB_PROP_MARKETS = new Set([
   'player_hits',
@@ -1253,7 +1254,12 @@ module.exports = async function handler(req, res) {
     };
 
     const mlbSupplements = supplementalMlbBooks();
+    const delayedCoreSports = [];
     for (const sport of CORE_SPORTS) {
+      if (LOW_PRIORITY_CORE_SPORTS.has(sport)) {
+        delayedCoreSports.push(sport);
+        continue;
+      }
       if (sport === 'baseball_mlb' && mlbSupplements.length && !MLB_ALL_BOOKS_ODDS_ENABLED) {
         planningDebug.skippedSports.push({
           sport,
@@ -1299,6 +1305,9 @@ module.exports = async function handler(req, res) {
           commenceTimeTo: timeWindow.commenceTimeTo
         }
       });
+    }
+    for (const sport of delayedCoreSports) {
+      maybeAddSportOddsCall(sport);
     }
     if (includeProps) {
       maybeAddCall({
