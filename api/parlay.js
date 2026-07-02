@@ -598,8 +598,7 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
       const outcomes = market.outcomes || [];
 
       if (staleSportsbookRow(platform, book, market, meta)) {
-        noteSkip(debug, `stale_book_${platform}`);
-        continue;
+        noteSkip(debug, `stale_book_included_${platform}`);
       }
 
       if (key === 'h2h') {

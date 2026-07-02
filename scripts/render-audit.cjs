@@ -146,7 +146,7 @@ function parseKalshiTicker(ticker) {
   return null;
 }
 
-function boardRow({ platform, endpoint, rawEventId, rawCommenceTime, home, away, marketType, lineType = 'main', side, line, price, rawPrice, rawPriceType, rawMarketKey, lastUpdate, fetchTimestamp, rawTitle }) {
+function boardRow({ platform, endpoint, rawEventId, rawCommenceTime, home, away, sport = 'mlb', marketType, lineType = 'main', side, line, price, rawPrice, rawPriceType, rawMarketKey, lastUpdate, fetchTimestamp, rawTitle }) {
   const homeAbbr = abbr(home);
   const awayAbbr = abbr(away);
   const eventDate = rawCommenceTime ? String(rawCommenceTime).slice(0, 10) : null;
@@ -170,7 +170,8 @@ function boardRow({ platform, endpoint, rawEventId, rawCommenceTime, home, away,
     displayedLocalDate: displayDate,
     homeTeam: home,
     awayTeam: away,
-    normalizedEventKey: ['mlb', awayAbbr, homeAbbr, eventDate || rawEventId || ''].join('|'),
+    normalizedEventKey: [sport || 'mlb', awayAbbr, homeAbbr, eventDate || rawEventId || ''].join('|'),
+    sport: sport || 'mlb',
     marketType,
     lineType,
     side,
@@ -195,8 +196,8 @@ function isLiveGameTime(rawTime) {
 
 function parlayRows(markets, fetchTimestamp) {
   const rows = [];
-  (markets || []).filter(m => m.sport === 'mlb' && APPROVED.includes(m.platform)).forEach(m => {
-    const base = { platform: m.platform, endpoint: m.sourceProof?.YES?.sourceEndpoint || '/api/parlay', rawEventId: m.sourceProof?.YES?.rawEventId || m.id, rawCommenceTime: m.startTime, home: m.home, away: m.away, marketType: m.marketType, lineType: m.lineType || 'main', line: m.line ?? null, rawMarketKey: m.sourceProof?.YES?.rawMarketKey || m.marketType, fetchTimestamp, rawTitle: m.rawTitle };
+  (markets || []).filter(m => APPROVED.includes(m.platform)).forEach(m => {
+    const base = { platform: m.platform, endpoint: m.sourceProof?.YES?.sourceEndpoint || '/api/parlay', rawEventId: m.sourceProof?.YES?.rawEventId || m.id, rawCommenceTime: m.startTime, home: m.home, away: m.away, sport: m.sport || 'mlb', marketType: m.marketType, lineType: m.lineType || 'main', line: m.line ?? null, rawMarketKey: m.sourceProof?.YES?.rawMarketKey || m.marketType, fetchTimestamp, rawTitle: m.rawTitle };
     const label = (proof, fallbackSide) => {
       const side = proof?.normalizedSide?.replace(/\s+wins$/i, '') || fallbackSide;
       if (m.marketType === 'moneyline') return `${side} moneyline`;
