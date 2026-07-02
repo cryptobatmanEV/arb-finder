@@ -1155,7 +1155,7 @@ function spreadFavoredTeam(m) {
 
 
 // ─── ARB CALCULATION ──────────────────────────────────────────────────────────
-const NEAR_ARB_BAND = 0.02;
+const NEAR_ARB_BAND = 0.05;
 
 function fallbackSourceProof(m, outcome, price) {
   const title = outcome === 'YES' ? (m.rawTitle || m.noTitle) : (m.noTitle || m.rawTitle);
@@ -3155,7 +3155,7 @@ function App() {
             <div className="near-section">
               <button className="near-hdr-btn" onClick={() => setNearOpen(!nearOpen)}>
                 <span className={`chev${nearOpen?' open':''}`}>▶</span>
-                Near-arbs ({displayNear.length}) — within 2% of profitable
+                Near-arbs ({displayNear.length}) — within 5% of profitable
               </button>
               {nearOpen && displayNear.length > 0 && (
                 <div className="cards">{displayNear.map(o => <ArbCard key={o.id} opp={o} />)}</div>

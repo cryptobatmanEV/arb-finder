@@ -1,7 +1,7 @@
 const https = require('https');
 
 const ORIGIN = process.argv[2] || 'https://arb-finder-sooty.vercel.app';
-const NEAR_ARB_BAND = 0.02;
+const NEAR_ARB_BAND = Number(process.env.RENDER_AUDIT_NEAR_ARB_BAND || 0.05);
 const APPROVED = [
   'fanduel', 'draftkings', 'betmgm', 'caesars', 'bovada', 'bet365',
   'fanatics', 'hardrock', 'betrivers', 'pinnacle', 'kalshi', 'novig',
@@ -308,6 +308,85 @@ function matchBoard(rows) {
   return { cards, duplicateKeys };
 }
 
+function marginDistribution(rows) {
+  const groups = new Map();
+  rows.forEach(row => {
+    const key = [row.normalizedEventKey, row.marketType, row.lineType || 'main', row.line ?? ''].join('|');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  });
+  const valid = [];
+  const skipped = {};
+  groups.forEach((items, key) => {
+    const sideGroups = new Map();
+    items.forEach(row => {
+      const sk = sideKey(row);
+      if (!sideGroups.has(sk)) sideGroups.set(sk, []);
+      sideGroups.get(sk).push(row);
+    });
+    if (sideGroups.size !== 2) {
+      skipped.side_count_not_two = (skipped.side_count_not_two || 0) + 1;
+      return;
+    }
+    const [aKey, bKey] = [...sideGroups.keys()].sort();
+    const dedupe = (sideRows) => {
+      const bestByBook = new Map();
+      sideRows.forEach(row => {
+        const current = bestByBook.get(row.platform);
+        if (!current || row.normalizedImpliedProbability < current.normalizedImpliedProbability) bestByBook.set(row.platform, row);
+      });
+      return [...bestByBook.values()].sort((a, b) => a.normalizedImpliedProbability - b.normalizedImpliedProbability);
+    };
+    const aRows = dedupe(sideGroups.get(aKey));
+    const bRows = dedupe(sideGroups.get(bKey));
+    let best = null;
+    aRows.forEach(a => bRows.forEach(b => {
+      if (a.platform === b.platform) return;
+      const sum = a.normalizedImpliedProbability + b.normalizedImpliedProbability;
+      if (!best || sum < best.sum) best = { a, b, sum };
+    }));
+    if (!best) {
+      skipped.no_cross_book_pair = (skipped.no_cross_book_pair || 0) + 1;
+      return;
+    }
+    if (best.sum < 0.90 || best.sum > 1.18 || best.a.normalizedImpliedProbability < 0.04 || best.b.normalizedImpliedProbability < 0.04) {
+      skipped.price_sanity = (skipped.price_sanity || 0) + 1;
+      return;
+    }
+    valid.push({
+      key,
+      sport: best.a.sport,
+      marketType: best.a.marketType,
+      lineType: best.a.lineType || 'main',
+      margin: (1 - best.sum) * 100,
+      main: [best.a, best.b],
+      sideCounts: [aRows.length, bRows.length]
+    });
+  });
+  const thresholds = [0, 1, 2, 3, 5, 7, 10];
+  const byThreshold = {};
+  thresholds.forEach(n => {
+    byThreshold[`within${n}Pct`] = valid.filter(row => row.margin > -n).length;
+  });
+  return {
+    totalGroups: groups.size,
+    validTwoSidedGroups: valid.length,
+    skipped,
+    byThreshold,
+    bySport: countBy(valid, row => row.sport),
+    byMarket: countBy(valid, row => row.marketType),
+    top20: [...valid].sort((a, b) => b.margin - a.margin).slice(0, 20).map(row => ({
+      key: row.key,
+      sport: row.sport,
+      marketType: row.marketType,
+      lineType: row.lineType,
+      margin: Number(row.margin.toFixed(2)),
+      main: row.main.map(item => `${item.platform}: ${item.side} ${item.normalizedAmericanOdds}`),
+      sideCounts: row.sideCounts
+    }))
+  };
+}
+
 function priceExamples(rows, platform, limit = 3) {
   return rows.filter(r => r.platform === platform).slice(0, limit).map(r => ({
     rawTitle: r.rawTitle,
@@ -351,6 +430,7 @@ function priceExamples(rows, platform, limit = 3) {
     sportsbookBooksSeen: [...seenBooks].filter(book => SPORTSBOOK.has(book)).sort(),
     booksVisibleInExpandedSections: [...visibleBooks].sort(),
     groupedCardCount: cards.length,
+    marginDistribution: marginDistribution(rows),
     groupedCardCountByLineType: countBy(cards, card => (card.main?.[0]?.lineType || 'main')),
     duplicateCardCount: duplicateKeys.length,
     liveArbCount: cards.filter(c => c.isArb).length,
