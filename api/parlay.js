@@ -120,14 +120,16 @@ const SUPPORTED_EXCHANGE_CALLS = [
 ];
 
 const DEFAULT_MLB_SUPPLEMENT_BOOKS = [
+  'fanduel',
   'betmgm',
   'caesars',
   'bovada',
   'pinnacle',
-  'fanatics',
-  'betrivers'
+  'betrivers',
+  'fanatics'
 ];
 const SUPPLEMENTAL_MLB_MARKETS = process.env.PARLAY_MLB_SUPPLEMENT_MARKETS || 'h2h,spreads,totals';
+const MLB_ALL_BOOKS_ODDS_ENABLED = process.env.PARLAY_MLB_ALL_BOOKS_ODDS === '1';
 
 const SAFE_MLB_PROP_MARKETS = new Set([
   'player_hits',
@@ -1250,7 +1252,22 @@ module.exports = async function handler(req, res) {
       return added;
     };
 
+    const mlbSupplements = supplementalMlbBooks();
     for (const sport of CORE_SPORTS) {
+      if (sport === 'baseball_mlb' && mlbSupplements.length && !MLB_ALL_BOOKS_ODDS_ENABLED) {
+        planningDebug.skippedSports.push({
+          sport,
+          reason: 'mlb_all_books_odds_skipped_verified_zero_use_direct_bookmaker_supplements',
+          eventPrecheckRows: eventPrecheckRows[sport] ?? null
+        });
+        planningDebug.includedSports.push({
+          sport,
+          eventPrecheckRows: eventPrecheckRows[sport] ?? null,
+          activeInSports: activeSportSet.has(sport),
+          source: 'direct_bookmaker_supplements'
+        });
+        continue;
+      }
       maybeAddSportOddsCall(sport);
     }
     for (const sport of optionalSports) {
@@ -1266,7 +1283,7 @@ module.exports = async function handler(req, res) {
         params: { exchange: call.exchange }
       });
     }
-    for (const bookmaker of supplementalMlbBooks()) {
+    for (const bookmaker of mlbSupplements) {
       if (!planningDebug.includedSports.some(row => row.sport === 'baseball_mlb')) continue;
       maybeAddCall({
         kind: 'mlb_supplement',
