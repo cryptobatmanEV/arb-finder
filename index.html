@@ -2965,7 +2965,13 @@ function App() {
     return () => clearInterval(id);
   }, [refresh]);
 
-  const visibleByBooks = (o) => enabledBooks.includes(o.legA?.platform) && enabledBooks.includes(o.legB?.platform);
+  const visibleByBooks = (o) => {
+    if (enabledBooks.length === ALL_BOOK_FILTERS.length) return true;
+    const enabled = new Set(enabledBooks);
+    const sideA = (o.sideBoards?.legA?.length ? o.sideBoards.legA : [o.legA]).filter(Boolean);
+    const sideB = (o.sideBoards?.legB?.length ? o.sideBoards.legB : [o.legB]).filter(Boolean);
+    return sideA.some(a => enabled.has(a.platform) && sideB.some(b => enabled.has(b.platform) && a.platform !== b.platform));
+  };
   const visibleByDate = (o) => !todayOnly || o.gameDate === appLocalDate(new Date().toISOString());
   const coreSet = new Set(CORE_PLATFORMS);
   const sportsbookSet = new Set(SPORTSBOOK_PLATFORMS);
