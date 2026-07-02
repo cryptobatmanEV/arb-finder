@@ -1220,12 +1220,14 @@ function validateArbMarketPair(mA, mB) {
     passed: false,
     reason,
     marketFamily: mA?.marketType || null,
+    lineType: mA?.lineType || null,
     legA: {
       platform: mA?.platform || null,
       rawMarketKey: mA?.sourceProof?.YES?.rawMarketKey || mA?.sourceProof?.NO?.rawMarketKey || null,
       normalizedMarketType: mA?.marketType || null,
       proofMarketFamily: proofMarketFamily(mA),
       line: mA?.line ?? null,
+      lineType: mA?.lineType || 'main',
       gameKey: mA?.gameKey || null
     },
     legB: {
@@ -1234,6 +1236,7 @@ function validateArbMarketPair(mA, mB) {
       normalizedMarketType: mB?.marketType || null,
       proofMarketFamily: proofMarketFamily(mB),
       line: mB?.line ?? null,
+      lineType: mB?.lineType || 'main',
       gameKey: mB?.gameKey || null
     }
   });
@@ -1242,6 +1245,7 @@ function validateArbMarketPair(mA, mB) {
   if (!mA.gameKey || !mB.gameKey || mA.gameKey !== mB.gameKey) return fail('different_event');
   if (!mA.marketType || !mB.marketType || mA.marketType !== mB.marketType) return fail('mixed_market_type');
   if (!['moneyline', 'spread', 'total'].includes(mA.marketType)) return fail('unsupported_market_family');
+  if ((mA.lineType || 'main') !== (mB.lineType || 'main')) return fail('mixed_line_type');
 
   const proofA = proofMarketFamily(mA);
   const proofB = proofMarketFamily(mB);
@@ -1266,12 +1270,14 @@ function validateArbMarketPair(mA, mB) {
   return {
     passed: true,
     marketFamily: mA.marketType,
+    lineType: mA.lineType || 'main',
     legA: {
       platform: mA.platform,
       rawMarketKey: mA.sourceProof?.YES?.rawMarketKey || mA.sourceProof?.NO?.rawMarketKey || null,
       normalizedMarketType: mA.marketType,
       proofMarketFamily: proofA,
       line: mA.line ?? null,
+      lineType: mA.lineType || 'main',
       gameKey: mA.gameKey
     },
     legB: {
@@ -1280,6 +1286,7 @@ function validateArbMarketPair(mA, mB) {
       normalizedMarketType: mB.marketType,
       proofMarketFamily: proofB,
       line: mB.line ?? null,
+      lineType: mB.lineType || 'main',
       gameKey: mB.gameKey
     }
   };
@@ -1732,6 +1739,7 @@ function extractParlayStructure(m, debug = null) {
   const away = m.away;
   const platform = (m.platform || m.bookKey || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   const marketType = m.marketType || 'moneyline';
+  const lineType = m.lineType === 'alt' ? 'alt' : 'main';
   const sport = m.sport || 'other';
   const startTime = m.startTime || m.commence_time || '';
   if (!home || !away || !platform || sport === 'other') {
@@ -1760,6 +1768,7 @@ function extractParlayStructure(m, debug = null) {
     awayAbbr,
     homeAbbr,
     marketType,
+    lineType,
     m.line ?? '',
     m.player || '',
     m.statType || ''
@@ -1806,6 +1815,7 @@ function extractParlayStructure(m, debug = null) {
     gameKey,
     teams: [awayAbbr, homeAbbr],
     marketType,
+    lineType,
     line,
     favoredTeam,
     spreadSides: m.spreadSides || null,
@@ -1833,6 +1843,7 @@ function extractParlayStructure(m, debug = null) {
     normalized.sport,
     normalized.gameKey,
     normalized.marketType,
+    normalized.lineType,
     normalized.line ?? '',
     normalized.favoredTeam || '',
     normalized.player || '',
@@ -1995,6 +2006,7 @@ function groupedOppKey(opp) {
     gameKey,
     opp.sport,
     opp.marketType,
+    opp.lineType || 'main',
     line,
     opp.gameDate || '',
     sides
@@ -2007,6 +2019,7 @@ function marketMatchesGroupedOpp(market, opp) {
   const line = validation.legA?.line ?? validation.legB?.line ?? null;
   if (!market || !gameKey || market.gameKey !== gameKey) return false;
   if (market.sport !== opp.sport || market.marketType !== opp.marketType) return false;
+  if ((market.lineType || 'main') !== (opp.lineType || 'main')) return false;
   if (opp.marketType === 'moneyline') return market.line == null;
   if (opp.marketType === 'spread' || opp.marketType === 'total') {
     if (market.line == null || line == null) return false;
@@ -2032,6 +2045,7 @@ function marketSideLeg(market, outcome) {
     sport: market.sport,
     gameKey: market.gameKey,
     marketType: market.marketType,
+    lineType: market.lineType || 'main',
     line: market.line ?? null
   };
 }
@@ -2116,6 +2130,7 @@ function canonicalBoardRows(markets) {
         gameDate: displayLocalDate(rawTime, market.gameDate || null),
         rawCommenceTime: rawTime,
         marketType: market.marketType,
+        lineType: market.lineType || 'main',
         line: market.line ?? null,
         sideKey: canonicalSideIdentity(leg),
         exactBet,
@@ -2137,6 +2152,7 @@ function boardGroupKey(row) {
   return [
     row.eventKey,
     row.marketType,
+    row.lineType || 'main',
     row.line ?? ''
   ].map(v => String(v || '').toLowerCase()).join('|');
 }
@@ -2174,11 +2190,13 @@ function boardRowToLeg(row, stake = 0) {
     sport: row.sport,
     gameKey: row.gameKey,
     marketType: row.marketType,
+    lineType: row.lineType || 'main',
     line: row.line,
     sourceProof: {
       ...(row.sourceProof || {}),
       displayedBook: row.book,
       displayedMarketType: row.marketType,
+      displayedLineType: row.lineType || 'main',
       displayedSide: row.exactBet.replace(/\s+moneyline$/i, ''),
       displayedLine: row.line ?? null,
       displayedOdds: row.american,
@@ -2186,6 +2204,7 @@ function boardRowToLeg(row, stake = 0) {
       normalizedProbability: row.price,
       normalizedOdds: row.american,
       normalizedLine: row.line ?? null,
+      normalizedLineType: row.lineType || 'main',
       normalizedGameKey: row.eventKey,
       rawCommenceTime: row.rawCommenceTime,
       displayedDate: row.gameDate
@@ -2233,22 +2252,25 @@ function boardRowsToOpportunities(boardRows) {
     const stakeB = BASE_STAKE * best.b.price / denom;
     const profit = isArb ? BASE_STAKE * (1 / denom - 1) : 0;
     const title = best.a.title || best.b.title || 'MLB market';
-    const lineStr = best.a.line != null ? ` (${best.a.marketType === 'spread' ? 'spread ' : 'O/U '}${best.a.line})` : '';
+    const isAltLine = (best.a.lineType || 'main') === 'alt';
+    const lineStr = best.a.line != null ? ` (${isAltLine ? 'alt ' : ''}${best.a.marketType === 'spread' ? 'spread ' : 'O/U '}${best.a.line})` : '';
     const opp = {
       id: `${boardGroupKey(best.a)}::${sideAKey}::${sideBKey}`,
       title: title + lineStr,
       gameDate: best.a.gameDate || best.b.gameDate,
       sport: best.a.sport,
       marketType: best.a.marketType,
+      lineType: best.a.lineType || 'main',
       legA: boardRowToLeg(best.a, stakeA),
       legB: boardRowToLeg(best.b, stakeB),
       matchGroupKey: boardGroupKey(best.a),
       matchValidation: {
         passed: true,
         marketFamily: best.a.marketType,
+        lineType: best.a.lineType || 'main',
         source: 'canonical-board',
-        legA: { platform: best.a.platform, gameKey: best.a.eventKey, line: best.a.line ?? null, side: best.a.exactBet },
-        legB: { platform: best.b.platform, gameKey: best.b.eventKey, line: best.b.line ?? null, side: best.b.exactBet }
+        legA: { platform: best.a.platform, gameKey: best.a.eventKey, line: best.a.line ?? null, lineType: best.a.lineType || 'main', side: best.a.exactBet },
+        legB: { platform: best.b.platform, gameKey: best.b.eventKey, line: best.b.line ?? null, lineType: best.b.lineType || 'main', side: best.b.exactBet }
       },
       impliedSum: best.sum * 100,
       margin,
@@ -2518,7 +2540,7 @@ function AlsoAvailable({ opp }) {
 }
 
 function ArbCard({ opp }) {
-  const { legA, legB, margin, roi, sport, marketType, title, isNear, impliedSum, gameDate } = opp;
+  const { legA, legB, margin, roi, sport, marketType, lineType, title, isNear, impliedSum, gameDate } = opp;
   const [stakeA, setStakeA] = React.useState('');
   const [stakeB, setStakeB] = React.useState('');
   const [activeInput, setActiveInput] = React.useState(null);
@@ -2568,6 +2590,7 @@ function ArbCard({ opp }) {
         <div className="card-tags">
           <span className="cat-tag">{sport.toUpperCase()}</span>
           <span className="type-tag">{marketType.toUpperCase()}</span>
+          {lineType === 'alt' && <span className="cat-tag">ALT LINE</span>}
           {!isNear && <span className="roi-tag">ROI {fmt(roi,2)}%</span>}
           {opp.isLive && <span className="cat-tag" style={{background:'#ff3333',color:'#fff',animation:'pulse 1.5s infinite'}}>● LIVE</span>}
         </div>
@@ -2846,6 +2869,7 @@ function App() {
       sportsbookResultCardsTotal: resultOpps.filter(o => opportunityPlatforms(o).some(platform => sportsbookSet.has(platform))).length,
       canonicalBoardRows: canonicalBoard.length,
       canonicalBoardRowsByPlatform: countByPlatform(canonicalBoard),
+      canonicalBoardRowsByLineType: countByPlatform(canonicalBoard.map(row => ({ platform: row.lineType || 'main' }))),
       boardSkippedReasons: boardResult.skipped,
       rawValidatedCardsBeforeGrouping: rawValidatedOpps.length,
       groupedCardsAfterGrouping: groupedOpps.length,
@@ -2853,6 +2877,7 @@ function App() {
       rawNearCardsBeforeGrouping: groupedNear.length,
       groupedArbCards: groupedArbs.length,
       groupedNearCards: groupedNear.length,
+      groupedCardsByLineType: countByPlatform(groupedOpps.map(opp => ({ platform: opp.lineType || 'main' }))),
       matchValidationSkips,
       mixedMarketMatchesSkipped: matchValidationSkips.mixed_market_type || 0
     };
@@ -2953,7 +2978,7 @@ function App() {
     return true;
   };
   const visibleByMarket = (o) => {
-    if (marketFilter === 'main') return ['moneyline','spread','total'].includes(o.marketType);
+    if (marketFilter === 'main') return (o.lineType || 'main') === 'main' && ['moneyline','spread','total'].includes(o.marketType);
     if (['moneyline','spread','total'].includes(marketFilter)) return o.marketType === marketFilter;
     return true;
   };

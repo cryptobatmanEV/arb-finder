@@ -146,7 +146,7 @@ function parseKalshiTicker(ticker) {
   return null;
 }
 
-function boardRow({ platform, endpoint, rawEventId, rawCommenceTime, home, away, marketType, side, line, price, rawPrice, rawPriceType, rawMarketKey, lastUpdate, fetchTimestamp, rawTitle }) {
+function boardRow({ platform, endpoint, rawEventId, rawCommenceTime, home, away, marketType, lineType = 'main', side, line, price, rawPrice, rawPriceType, rawMarketKey, lastUpdate, fetchTimestamp, rawTitle }) {
   const homeAbbr = abbr(home);
   const awayAbbr = abbr(away);
   const eventDate = rawCommenceTime ? String(rawCommenceTime).slice(0, 10) : null;
@@ -172,6 +172,7 @@ function boardRow({ platform, endpoint, rawEventId, rawCommenceTime, home, away,
     awayTeam: away,
     normalizedEventKey: ['mlb', awayAbbr, homeAbbr, eventDate || rawEventId || ''].join('|'),
     marketType,
+    lineType,
     side,
     line: line ?? null,
     rawPriceField: rawPrice,
@@ -195,7 +196,7 @@ function isLiveGameTime(rawTime) {
 function parlayRows(markets, fetchTimestamp) {
   const rows = [];
   (markets || []).filter(m => m.sport === 'mlb' && APPROVED.includes(m.platform)).forEach(m => {
-    const base = { platform: m.platform, endpoint: m.sourceProof?.YES?.sourceEndpoint || '/api/parlay', rawEventId: m.sourceProof?.YES?.rawEventId || m.id, rawCommenceTime: m.startTime, home: m.home, away: m.away, marketType: m.marketType, line: m.line ?? null, rawMarketKey: m.sourceProof?.YES?.rawMarketKey || m.marketType, fetchTimestamp, rawTitle: m.rawTitle };
+    const base = { platform: m.platform, endpoint: m.sourceProof?.YES?.sourceEndpoint || '/api/parlay', rawEventId: m.sourceProof?.YES?.rawEventId || m.id, rawCommenceTime: m.startTime, home: m.home, away: m.away, marketType: m.marketType, lineType: m.lineType || 'main', line: m.line ?? null, rawMarketKey: m.sourceProof?.YES?.rawMarketKey || m.marketType, fetchTimestamp, rawTitle: m.rawTitle };
     const label = (proof, fallbackSide) => {
       const side = proof?.normalizedSide?.replace(/\s+wins$/i, '') || fallbackSide;
       if (m.marketType === 'moneyline') return `${side} moneyline`;
@@ -266,7 +267,7 @@ function sideKey(row) {
 function matchBoard(rows) {
   const groups = new Map();
   rows.forEach(row => {
-    const key = [row.normalizedEventKey, row.marketType, row.line ?? ''].join('|');
+    const key = [row.normalizedEventKey, row.marketType, row.lineType || 'main', row.line ?? ''].join('|');
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(row);
   });
@@ -334,7 +335,7 @@ function priceExamples(rows, platform, limit = 3) {
   const seenBooks = new Set(rows.map(row => row.platform));
   const renderedMarketKeys = new Set(cards.map(card => card.key));
   const booksExpectedInRenderedMarkets = new Set(rows
-    .filter(row => renderedMarketKeys.has([row.normalizedEventKey, row.marketType, row.line ?? ''].join('|')))
+    .filter(row => renderedMarketKeys.has([row.normalizedEventKey, row.marketType, row.lineType || 'main', row.line ?? ''].join('|')))
     .map(row => row.platform));
   const disappearedSportsbooks = [...booksExpectedInRenderedMarkets].filter(book => SPORTSBOOK.has(book) && !visibleBooks.has(book));
   const atlSdRows = rows.filter(row => /atl|braves/i.test(row.normalizedEventKey + row.side + row.rawTitle) && /sd|padres/i.test(row.normalizedEventKey + row.side + row.rawTitle));
@@ -345,9 +346,11 @@ function priceExamples(rows, platform, limit = 3) {
     origin: ORIGIN,
     canonicalBoardRows: rows.length,
     canonicalBoardRowsByBook: countBy(rows, row => row.platform),
+    canonicalBoardRowsByLineType: countBy(rows, row => row.lineType || 'main'),
     sportsbookBooksSeen: [...seenBooks].filter(book => SPORTSBOOK.has(book)).sort(),
     booksVisibleInExpandedSections: [...visibleBooks].sort(),
     groupedCardCount: cards.length,
+    groupedCardCountByLineType: countBy(cards, card => (card.main?.[0]?.lineType || 'main')),
     duplicateCardCount: duplicateKeys.length,
     liveArbCount: cards.filter(c => c.isArb).length,
     nearArbCount: cards.filter(c => !c.isArb).length,
@@ -374,6 +377,7 @@ function priceExamples(rows, platform, limit = 3) {
     })).slice(0, 20),
     first5GroupedCards: cards.slice(0, 5).map(card => ({
       key: card.key,
+      lineType: card.main?.[0]?.lineType || 'main',
       margin: Number(card.margin.toFixed(2)),
       isLive: card.isLive,
       main: card.main.map(row => `${row.platform}: ${row.side} ${row.normalizedAmericanOdds}`),

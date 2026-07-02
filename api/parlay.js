@@ -260,6 +260,20 @@ function unsupportedEventLine(context, sport, marketType, line) {
   return false;
 }
 
+function sportsbookAltLineType(platform, sport, marketType, line, lineContext) {
+  if (!SPORTSBOOK_BOOK_SET.has(platform)) return null;
+  if (marketType !== 'spread' && marketType !== 'total') return null;
+  if (sportShort(sport) !== 'mlb') return null;
+  const n = Number(line);
+  if (!Number.isFinite(n)) return null;
+  if (marketType === 'spread') return Math.abs(n) === 1.5 ? 'main' : 'alt';
+  if (marketType === 'total') {
+    if (unsupportedMainLine(sport, marketType, n)) return null;
+    return unsupportedEventLine(lineContext, sport, marketType, n) ? 'alt' : 'main';
+  }
+  return null;
+}
+
 function requestPath(endpoint, params = {}) {
   const qs = new URLSearchParams();
   Object.entries(params || {}).forEach(([key, value]) => {
@@ -355,6 +369,7 @@ function marketDedupeKey(market) {
     market.platform,
     market.sport,
     market.marketType,
+    market.lineType || 'main',
     market.away,
     market.home,
     eventDate,
@@ -642,11 +657,12 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
           noteSkip(debug, 'total_missing_prices_or_line');
           continue;
         }
-        if (unsupportedMainLine(sport, 'total', point)) {
+        const lineType = sportsbookAltLineType(platform, sport, 'total', point, lineContext);
+        if (!lineType && unsupportedMainLine(sport, 'total', point)) {
           noteSkip(debug, `unsupported_main_total_line_${sportShort(sport)}_${point}`);
           continue;
         }
-        if (unsupportedEventLine(lineContext, sport, 'total', point)) {
+        if (!lineType && unsupportedEventLine(lineContext, sport, 'total', point)) {
           noteSkip(debug, `non_anchor_total_line_${sportShort(sport)}_${point}_main_${lineContext.mlbMainTotalLine}`);
           continue;
         }
@@ -661,8 +677,9 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
     platform,
     bookTitle,
     trustStatus: SPORTSBOOK_BOOK_SET.has(platform) ? 'trusted_live' : 'trusted_live',
-    sport: sportShort(sport),
+          sport: sportShort(sport),
           marketType: 'total',
+          lineType: lineType || 'main',
           home,
           away,
           startTime,
@@ -699,7 +716,8 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
           noteSkip(debug, 'spread_points_not_opposing');
           continue;
         }
-        if (unsupportedMainLine(sport, 'spread', Math.abs(awayPoint))) {
+        const lineType = sportsbookAltLineType(platform, sport, 'spread', Math.abs(awayPoint), lineContext);
+        if (!lineType && unsupportedMainLine(sport, 'spread', Math.abs(awayPoint))) {
           noteSkip(debug, `unsupported_main_spread_line_${sportShort(sport)}_${Math.abs(awayPoint)}`);
           continue;
         }
@@ -712,6 +730,7 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
           trustStatus: SPORTSBOOK_BOOK_SET.has(platform) ? 'trusted_live' : 'trusted_live',
           sport: sportShort(sport),
           marketType: 'spread',
+          lineType: lineType || 'main',
           home,
           away,
           startTime,
