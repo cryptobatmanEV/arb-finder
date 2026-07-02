@@ -11,6 +11,20 @@ const DEFAULT_SPORTS = [
   'icehockey_nhl'
 ];
 
+const DEFAULT_BOOKMAKERS = [
+  'fanduel',
+  'draftkings',
+  'betmgm',
+  'caesars',
+  'bovada',
+  'bet365',
+  'fanatics',
+  'hardrock',
+  'betrivers',
+  'pinnacle',
+  'novig'
+];
+
 function listFromPayload(json) {
   return Array.isArray(json) ? json : (json?.data || json?.events || []);
 }
@@ -33,6 +47,26 @@ function parseSports(req) {
     return sports.length ? sports : DEFAULT_SPORTS;
   } catch (_) {
     return DEFAULT_SPORTS;
+  }
+}
+
+function parseBookmakers(req) {
+  try {
+    const url = new URL(req.url || '', 'https://arb-finder.local');
+    const raw = url.searchParams.get('bookmakers') || '';
+    const books = raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    return books.length ? books : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function includePerBookAudit(req) {
+  try {
+    const url = new URL(req.url || '', 'https://arb-finder.local');
+    return url.searchParams.get('perBook') === '1';
+  } catch (_) {
+    return false;
   }
 }
 
@@ -124,6 +158,9 @@ module.exports = async function handler(req, res) {
 
   const days = parseDays(req);
   const sports = parseSports(req);
+  const perBook = includePerBookAudit(req);
+  const perBookBookmakers = parseBookmakers(req);
+  const bookmakersToAudit = perBookBookmakers.length ? perBookBookmakers : DEFAULT_BOOKMAKERS;
   const now = new Date();
   const to = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
   const commenceTimeFrom = now.toISOString();
@@ -136,11 +173,14 @@ module.exports = async function handler(req, res) {
     days,
     commenceTimeFrom,
     commenceTimeTo,
+    perBook,
+    bookmakersToAudit: perBook ? bookmakersToAudit : [],
     sports: {},
     notes: [
       'Raw upstream audit only. This endpoint does not normalize, filter, match, or calculate arbs.',
       'Odds are called once with the production date window and once without commenceTimeFrom/commenceTimeTo.',
-      'No bookmaker allow-list is sent; this uses regions=us with h2h,spreads,totals.'
+      'No bookmaker allow-list is sent for oddsWithDate/oddsWithoutDate; these use regions=us with h2h,spreads,totals.',
+      'When perBook=1 is set, direct bookmaker calls are also made with bookmakers=<key>.'
     ]
   };
 
@@ -178,6 +218,40 @@ module.exports = async function handler(req, res) {
     const eventRows = events.ok ? listFromPayload(events.json) : [];
     const withDateRows = oddsWithDate.ok ? listFromPayload(oddsWithDate.json) : [];
     const withoutDateRows = oddsWithoutDate.ok ? listFromPayload(oddsWithoutDate.json) : [];
+    const perBookRows = [];
+
+    if (perBook) {
+      const settled = await Promise.allSettled(bookmakersToAudit.map(async bookmaker => {
+        const result = await fetchParlay(`/sports/${sport}/odds`, {
+          bookmakers: bookmaker,
+          markets: 'h2h,spreads,totals',
+          oddsFormat: 'american',
+          commenceTimeFrom,
+          commenceTimeTo
+        });
+        const rows = result.ok ? listFromPayload(result.json) : [];
+        return {
+          bookmaker,
+          requestPath: result.requestPath,
+          status: result.status,
+          ok: result.ok,
+          responseMs: result.responseMs,
+          headers: result.headers,
+          ...(result.ok ? summarizeEvents(rows) : { error: result.textStart })
+        };
+      }));
+
+      for (const item of settled) {
+        if (item.status === 'fulfilled') {
+          perBookRows.push(item.value);
+        } else {
+          perBookRows.push({
+            ok: false,
+            error: item.reason?.message || String(item.reason)
+          });
+        }
+      }
+    }
 
     output.sports[sport] = {
       eventsWithDate: {
@@ -211,7 +285,8 @@ module.exports = async function handler(req, res) {
         responseMs: oddsWithoutDate.responseMs,
         headers: oddsWithoutDate.headers,
         ...(oddsWithoutDate.ok ? summarizeEvents(withoutDateRows) : { error: oddsWithoutDate.textStart })
-      }
+      },
+      directBookmakerCalls: perBookRows
     };
   }
 
