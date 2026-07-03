@@ -200,6 +200,18 @@ function invalidSportsbookHold(platform, yesPrice, noPrice) {
   return !Number.isFinite(sum) || sum < 0.98 || sum > 1.25;
 }
 
+function invalidExchangeHold(platform, yesPrice, noPrice) {
+  if (!EXCHANGE_TITLES[platform]) return false;
+  const sum = Number(yesPrice) + Number(noPrice);
+  return !Number.isFinite(sum) || sum < 0.96 || sum > 1.12;
+}
+
+function missingExchangeVolume(platform, market) {
+  if (!EXCHANGE_TITLES[platform]) return false;
+  const volume = Number(market?.volume_usd);
+  return !Number.isFinite(volume) || volume <= 0;
+}
+
 function isAuditOnlyBook(platform) {
   return AUDIT_ONLY_BOOK_SET.has(platform);
 }
@@ -773,6 +785,10 @@ function normalizeExchangeMarket(exchangeKey, m, sport, debug, meta = {}) {
     noteSkip(debug, 'exchange_missing_event_fields');
     return null;
   }
+  if (missingExchangeVolume(platform, m)) {
+    noteSkip(debug, `exchange_zero_volume_${platform}`);
+    return null;
+  }
 
   const overPrice = implied(m.over_price);
   const underPrice = implied(m.under_price);
@@ -780,6 +796,10 @@ function normalizeExchangeMarket(exchangeKey, m, sport, debug, meta = {}) {
   if (marketType === 'moneyline' && marketKey === 'moneyline') {
     if (!overPrice || !underPrice) {
       noteSkip(debug, 'exchange_moneyline_missing_prices');
+      return null;
+    }
+    if (invalidExchangeHold(platform, underPrice, overPrice)) {
+      noteSkip(debug, `exchange_moneyline_invalid_same_exchange_hold_${platform}`);
       return null;
     }
 
@@ -860,6 +880,10 @@ function normalizeExchangeMarket(exchangeKey, m, sport, debug, meta = {}) {
     const awayPoint = -homePoint;
     if (Math.abs(awayPoint + homePoint) > 0.001) {
       noteSkip(debug, 'exchange_spread_points_not_opposing');
+      return null;
+    }
+    if (invalidExchangeHold(platform, underPrice, overPrice)) {
+      noteSkip(debug, `exchange_spread_invalid_same_exchange_hold_${platform}`);
       return null;
     }
     if (unsupportedMainLine(sport, 'spread', Math.abs(homePoint))) {
