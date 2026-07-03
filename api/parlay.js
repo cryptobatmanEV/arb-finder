@@ -128,7 +128,8 @@ const DEFAULT_MLB_SUPPLEMENT_BOOKS = [
   'betrivers',
   'fanatics'
 ];
-const SUPPLEMENTAL_MLB_MARKETS = process.env.PARLAY_MLB_SUPPLEMENT_MARKETS || 'h2h,spreads,totals';
+const GAME_LINE_MARKETS = process.env.PARLAY_GAME_LINE_MARKETS || 'h2h,spreads,totals,alternate_spreads';
+const SUPPLEMENTAL_MLB_MARKETS = process.env.PARLAY_MLB_SUPPLEMENT_MARKETS || GAME_LINE_MARKETS;
 const MLB_ALL_BOOKS_ODDS_ENABLED = process.env.PARLAY_MLB_ALL_BOOKS_ODDS === '1';
 const LOW_PRIORITY_CORE_SPORTS = new Set(['icehockey_nhl']);
 
@@ -710,7 +711,7 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
         });
       }
 
-      if (key === 'spreads') {
+      if (key === 'spreads' || key === 'alternate_spreads') {
         const awayOut = outcomes.find(o => o.name === away);
         const homeOut = outcomes.find(o => o.name === home);
         const awayPoint = Number(awayOut?.point);
@@ -730,7 +731,9 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
           noteSkip(debug, 'spread_points_not_opposing');
           continue;
         }
-        const lineType = sportsbookAltLineType(platform, sport, 'spread', Math.abs(awayPoint), lineContext);
+        const lineType = key === 'alternate_spreads'
+          ? 'alt'
+          : sportsbookAltLineType(platform, sport, 'spread', Math.abs(awayPoint), lineContext);
         if (!lineType && unsupportedMainLine(sport, 'spread', Math.abs(awayPoint))) {
           noteSkip(debug, `unsupported_main_spread_line_${sportShort(sport)}_${Math.abs(awayPoint)}`);
           continue;
@@ -1261,7 +1264,7 @@ module.exports = async function handler(req, res) {
         endpoint: `/sports/${sport}/odds`,
         params: {
           regions: 'us',
-          markets: 'h2h,spreads,totals',
+          markets: GAME_LINE_MARKETS,
           oddsFormat: 'american',
           commenceTimeFrom: timeWindow.commenceTimeFrom,
           commenceTimeTo: timeWindow.commenceTimeTo
