@@ -206,6 +206,16 @@ function invalidExchangeHold(platform, yesPrice, noPrice) {
   return !Number.isFinite(sum) || sum < 0.96 || sum > 1.12;
 }
 
+function invalidOddsFeedHold(platform, yesPrice, noPrice) {
+  return invalidSportsbookHold(platform, yesPrice, noPrice) || invalidExchangeHold(platform, yesPrice, noPrice);
+}
+
+function oddsFeedHoldSkipReason(marketKey, platform) {
+  if (SPORTSBOOK_BOOK_SET.has(platform)) return `sportsbook_${marketKey}_invalid_same_book_hold_${platform}`;
+  if (EXCHANGE_TITLES[platform]) return `exchange_${marketKey}_invalid_same_source_hold_${platform}`;
+  return `odds_${marketKey}_invalid_same_source_hold_${platform}`;
+}
+
 function missingExchangeVolume(platform, market) {
   if (!EXCHANGE_TITLES[platform]) return false;
   const volume = Number(market?.volume_usd);
@@ -631,8 +641,8 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
           noteSkip(debug, 'h2h_missing_prices');
           continue;
         }
-        if (invalidSportsbookHold(platform, yesPrice, noPrice)) {
-          noteSkip(debug, `sportsbook_h2h_invalid_same_book_hold_${platform}`);
+        if (invalidOddsFeedHold(platform, yesPrice, noPrice)) {
+          noteSkip(debug, oddsFeedHoldSkipReason('h2h', platform));
           continue;
         }
 
@@ -680,8 +690,8 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
           noteSkip(debug, `non_anchor_total_line_${sportShort(sport)}_${point}_main_${lineContext.mlbMainTotalLine}`);
           continue;
         }
-        if (invalidSportsbookHold(platform, yesPrice, noPrice)) {
-          noteSkip(debug, `sportsbook_total_invalid_same_book_hold_${platform}`);
+        if (invalidOddsFeedHold(platform, yesPrice, noPrice)) {
+          noteSkip(debug, oddsFeedHoldSkipReason('total', platform));
           continue;
         }
 
@@ -722,8 +732,8 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
           noteSkip(debug, 'spread_missing_team_price_or_line');
           continue;
         }
-        if (invalidSportsbookHold(platform, yesPrice, noPrice)) {
-          noteSkip(debug, `sportsbook_spread_invalid_same_book_hold_${platform}`);
+        if (invalidOddsFeedHold(platform, yesPrice, noPrice)) {
+          noteSkip(debug, oddsFeedHoldSkipReason('spread', platform));
           continue;
         }
         if (Math.abs(awayPoint + homePoint) > 0.001) {
