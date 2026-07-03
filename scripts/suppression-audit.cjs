@@ -11,6 +11,8 @@ const SPORTSBOOK = new Set([
   'draftkings', 'fanduel', 'betmgm', 'caesars', 'bovada', 'bet365',
   'fanatics', 'hardrock', 'betrivers', 'pinnacle', 'stake', 'sugarhouse', 'tipico'
 ]);
+const CORE = new Set(['polymarket', 'kalshi', 'novig', 'fliff']);
+const EXCHANGE = new Set(['polymarket', 'kalshi', 'novig', 'prophetx']);
 const MLB_ABBR = {
   'atlanta braves': 'atl', braves: 'atl', atlanta: 'atl',
   'san diego padres': 'sd', padres: 'sd', 'san diego': 'sd',
@@ -328,6 +330,37 @@ function filterSuppressionAudit(cards) {
   };
 }
 
+function hasCrossBookPairInSet(card, platformSet) {
+  return (card.sideA || []).some(a =>
+    platformSet.has(a.platform) &&
+    (card.sideB || []).some(b => platformSet.has(b.platform) && a.platform !== b.platform)
+  );
+}
+
+function sourceFilterSuppressionAudit(cards) {
+  const filters = [
+    ['core', CORE],
+    ['sportsbook', SPORTSBOOK],
+    ['exchange', EXCHANGE]
+  ];
+  return Object.fromEntries(filters.map(([name, platformSet]) => {
+    const groupedAvailableCards = cards.filter(card => hasCrossBookPairInSet(card, platformSet));
+    const oldMainLegOnlyCards = cards.filter(card => (card.main || []).every(row => platformSet.has(row.platform)));
+    const rescued = groupedAvailableCards.filter(card => !oldMainLegOnlyCards.includes(card));
+    return [name, {
+      oldMainLegOnlyCount: oldMainLegOnlyCards.length,
+      groupedAvailableCount: groupedAvailableCards.length,
+      wouldBeHiddenByMainLegOnlySourceFilter: rescued.length,
+      examples: rescued.slice(0, 5).map(card => ({
+        key: card.key,
+        margin: Number(card.margin.toFixed(2)),
+        main: card.main.map(row => `${row.platform}: ${row.side} ${row.normalizedAmericanOdds}`),
+        availableBooks: [...new Set([...card.sideA, ...card.sideB].map(row => row.platform))].sort()
+      }))
+    }];
+  }));
+}
+
 function marginDistribution(rows) {
   const groups = new Map();
   rows.forEach(row => {
@@ -465,6 +498,7 @@ function priceExamples(rows, platform, limit = 3) {
     sportsbookBooksSeen: [...seenBooks].filter(book => SPORTSBOOK.has(book)).sort(),
     booksVisibleInExpandedSections: [...visibleBooks].sort(),
     filterSuppressionAudit: filterSuppressionAudit(cards),
+    sourceFilterSuppressionAudit: sourceFilterSuppressionAudit(cards),
     groupedCardCount: cards.length,
     marginDistribution: marginDistribution(rows),
     groupedCardCountByLineType: countBy(cards, card => (card.main?.[0]?.lineType || 'main')),

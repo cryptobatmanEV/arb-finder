@@ -2976,11 +2976,21 @@ function App() {
   const coreSet = new Set(CORE_PLATFORMS);
   const sportsbookSet = new Set(SPORTSBOOK_PLATFORMS);
   const exchangeSet = new Set(EXCHANGE_PLATFORMS);
+  const opportunitySideBooks = (o) => ({
+    sideA: (o.sideBoards?.legA?.length ? o.sideBoards.legA : [o.legA]).filter(Boolean),
+    sideB: (o.sideBoards?.legB?.length ? o.sideBoards.legB : [o.legB]).filter(Boolean)
+  });
+  const hasCrossBookPairInSet = (o, platformSet) => {
+    const { sideA, sideB } = opportunitySideBooks(o);
+    return sideA.some(a =>
+      platformSet.has(a.platform) &&
+      sideB.some(b => platformSet.has(b.platform) && a.platform !== b.platform)
+    );
+  };
   const visibleBySource = (o) => {
-    const platforms = [o.legA?.platform, o.legB?.platform].filter(Boolean);
-    if (sourceFilter === 'core') return platforms.every(platform => coreSet.has(platform));
-    if (sourceFilter === 'sportsbook') return platforms.every(platform => sportsbookSet.has(platform));
-    if (sourceFilter === 'exchange') return platforms.every(platform => exchangeSet.has(platform));
+    if (sourceFilter === 'core') return hasCrossBookPairInSet(o, coreSet);
+    if (sourceFilter === 'sportsbook') return hasCrossBookPairInSet(o, sportsbookSet);
+    if (sourceFilter === 'exchange') return hasCrossBookPairInSet(o, exchangeSet);
     return true;
   };
   const visibleByMarket = (o) => {
