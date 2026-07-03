@@ -114,9 +114,9 @@ const CORE_DUPLICATE_PARLAY_BOOK_SET = new Set(['kalshi', 'polymarket']);
 const MLB_MAIN_TOTAL_ANCHOR_BOOKS = ['pinnacle', 'draftkings', 'novig', 'betmgm', 'caesars', 'bovada', 'fanduel'];
 
 const SUPPORTED_EXCHANGE_CALLS = [
-  // Verified useful on 2026-06-23:
-  // /v1/exchange/baseball_mlb/markets?exchange=prophetx returns MLB game totals.
-  { exchange: 'prophetx', sport: 'baseball_mlb' }
+  // ProphetX is still listed as an exchange, but current exchange rows are
+  // zero-volume and not executable enough for arb math. Pull ProphetX MLB
+  // through /sports/baseball_mlb/odds as a bookmaker supplement instead.
 ];
 
 const DEFAULT_MLB_SUPPLEMENT_BOOKS = [
@@ -126,7 +126,8 @@ const DEFAULT_MLB_SUPPLEMENT_BOOKS = [
   'bovada',
   'pinnacle',
   'betrivers',
-  'fanatics'
+  'fanatics',
+  'prophetx'
 ];
 const SUPPLEMENTAL_MLB_MARKETS = process.env.PARLAY_MLB_SUPPLEMENT_MARKETS || 'h2h,spreads,totals';
 const MLB_ALL_BOOKS_ODDS_ENABLED = process.env.PARLAY_MLB_ALL_BOOKS_ODDS === '1';
