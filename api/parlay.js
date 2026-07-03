@@ -126,11 +126,10 @@ const DEFAULT_MLB_SUPPLEMENT_BOOKS = [
   'bovada',
   'pinnacle',
   'betrivers',
-  'fanatics',
-  'prophetx'
+  'fanatics'
 ];
 const SUPPLEMENTAL_MLB_MARKETS = process.env.PARLAY_MLB_SUPPLEMENT_MARKETS || 'h2h,spreads,totals';
-const MLB_ALL_BOOKS_ODDS_ENABLED = process.env.PARLAY_MLB_ALL_BOOKS_ODDS === '1';
+const MLB_ALL_BOOKS_ODDS_ENABLED = process.env.PARLAY_MLB_ALL_BOOKS_ODDS !== '0';
 const LOW_PRIORITY_CORE_SPORTS = new Set(['icehockey_nhl']);
 
 const SAFE_MLB_PROP_MARKETS = new Set([
