@@ -130,6 +130,7 @@ const DEFAULT_MLB_SUPPLEMENT_BOOKS = [
 ];
 const SUPPLEMENTAL_MLB_MARKETS = process.env.PARLAY_MLB_SUPPLEMENT_MARKETS || 'h2h,spreads,totals';
 const MLB_ALL_BOOKS_ODDS_ENABLED = process.env.PARLAY_MLB_ALL_BOOKS_ODDS !== '0';
+const ODDS_INCLUDE = process.env.PARLAY_ODDS_INCLUDE || 'verification';
 const LOW_PRIORITY_CORE_SPORTS = new Set(['icehockey_nhl']);
 
 const SAFE_MLB_PROP_MARKETS = new Set([
@@ -1273,6 +1274,7 @@ module.exports = async function handler(req, res) {
           regions: 'us',
           markets: 'h2h,spreads,totals',
           oddsFormat: 'american',
+          include: ODDS_INCLUDE,
           commenceTimeFrom: timeWindow.commenceTimeFrom,
           commenceTimeTo: timeWindow.commenceTimeTo
         }
@@ -1335,6 +1337,7 @@ module.exports = async function handler(req, res) {
           bookmakers: bookmaker,
           markets: SUPPLEMENTAL_MLB_MARKETS,
           oddsFormat: 'american',
+          include: ODDS_INCLUDE,
           commenceTimeFrom: timeWindow.commenceTimeFrom,
           commenceTimeTo: timeWindow.commenceTimeTo
         }

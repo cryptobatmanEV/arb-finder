@@ -400,6 +400,12 @@ function sourceList(rows) {
     .sort((a, b) => a.key.localeCompare(b.key));
 }
 
+function queryList(url, name, fallback) {
+  const raw = url.searchParams.get(name);
+  if (!raw) return fallback;
+  return raw.split(',').map(value => value.trim()).filter(Boolean);
+}
+
 function setDiff(allRows, seenRows) {
   const seen = new Set(seenRows.map(row => row.key));
   return allRows.filter(row => !seen.has(row.key));
@@ -530,6 +536,8 @@ module.exports = async function handler(req, res) {
     const auditProductionIssues = url.searchParams.get('auditProductionIssues') === '1';
     const auditBovadaAtlSd = url.searchParams.get('auditBovadaAtlSd') === '1';
     const auditAccuracy = url.searchParams.get('auditAccuracy') === '1';
+    const auditCoverage = url.searchParams.get('auditCoverage') === '1';
+    const auditDirect = url.searchParams.get('auditDirect') === '1';
     const checks = [];
     const bookmakerSeen = {};
     const exchangeSeen = {};
@@ -555,6 +563,165 @@ module.exports = async function handler(req, res) {
       .filter(Boolean)
       .sort();
     const sportsByKey = new Map(sports.rows.map(row => [row.key, row]));
+
+    if (auditCoverage || auditDirect) {
+      const requestedSports = queryList(url, 'sports', SPORTS);
+      const requestedBooks = queryList(url, 'books', FINAL_BOOK_KEYS)
+        .map(normalizeKey)
+        .filter(book => FINAL_BOOK_SET.has(book) && !REMOVED_BOOK_SET.has(book));
+      const eventAudits = [];
+      const allBooksOddsAudits = [];
+      const directBookAudits = [];
+      const freshnessAudits = [];
+      const parserCoverageAudits = [];
+
+      const metadataCalls = await Promise.allSettled([
+        callParlay('/meta/book-coverage', { window_minutes: 15 }),
+        callParlay('/meta/source-quality', { minutes: 10, limit: 200 })
+      ]);
+      metadataCalls.forEach(settled => {
+        if (settled.status === 'fulfilled') checks.push(settled.value);
+      });
+
+      const freshnessResults = await Promise.allSettled(requestedBooks.map(async book => {
+        const result = await callParlay(`/bookmakers/${book}/freshness`);
+        return { book, result };
+      }));
+      for (const settled of freshnessResults) {
+        if (settled.status !== 'fulfilled') {
+          freshnessAudits.push({ ok: false, error: settled.reason?.message || String(settled.reason) });
+          continue;
+        }
+        checks.push(settled.value.result);
+        freshnessAudits.push({
+          book: settled.value.book,
+          status: settled.value.result.status,
+          ok: settled.value.result.ok,
+          creditHeaders: settled.value.result.creditHeaders,
+          payloadTopLevelKeys: settled.value.result.payloadTopLevelKeys,
+          sampleRows: settled.value.result.sampleRows,
+          errorText: settled.value.result.errorText
+        });
+      }
+
+      for (const sport of requestedSports) {
+        const events = await callParlay(`/sports/${sport}/events`, {
+          commenceTimeFrom: timeWindow.commenceTimeFrom,
+          commenceTimeTo: timeWindow.commenceTimeTo
+        });
+        checks.push(events);
+        eventAudits.push({
+          sport,
+          status: events.status,
+          ok: events.ok,
+          rowCount: events.rows.length,
+          creditHeaders: events.creditHeaders,
+          first3Events: events.rows.slice(0, 3).map(compactRow)
+        });
+
+        const parserCoverage = await callParlay('/meta/parser-coverage', {
+          sport_key: sport,
+          window_hours: 24
+        });
+        checks.push(parserCoverage);
+        parserCoverageAudits.push({
+          sport,
+          status: parserCoverage.status,
+          ok: parserCoverage.ok,
+          rowCount: parserCoverage.rows.length,
+          creditHeaders: parserCoverage.creditHeaders,
+          sampleRows: parserCoverage.rows.slice(0, 5).map(compactRow),
+          errorText: parserCoverage.errorText
+        });
+
+        const allBooksOdds = await callParlay(`/sports/${sport}/odds`, {
+          regions: 'us',
+          markets: 'h2h,spreads,totals',
+          oddsFormat: 'american',
+          include: 'verification',
+          commenceTimeFrom: timeWindow.commenceTimeFrom,
+          commenceTimeTo: timeWindow.commenceTimeTo
+        });
+        checks.push(allBooksOdds);
+        allBooksOddsAudits.push({
+          sport,
+          status: allBooksOdds.status,
+          ok: allBooksOdds.ok,
+          creditHeaders: allBooksOdds.creditHeaders,
+          responseMs: allBooksOdds.elapsedMs,
+          ...summarizeOddsRows(allBooksOdds.rows)
+        });
+      }
+
+      if (auditDirect) {
+        for (const sport of requestedSports) {
+          for (const book of requestedBooks) {
+            if (book === 'kalshi' || book === 'polymarket') continue;
+            const direct = await callParlay(`/sports/${sport}/odds`, {
+              bookmakers: book,
+              markets: 'h2h,spreads,totals',
+              oddsFormat: 'american',
+              include: 'verification',
+              commenceTimeFrom: timeWindow.commenceTimeFrom,
+              commenceTimeTo: timeWindow.commenceTimeTo
+            });
+            checks.push(direct);
+            directBookAudits.push({
+              sport,
+              book,
+              status: direct.status,
+              ok: direct.ok,
+              creditHeaders: direct.creditHeaders,
+              responseMs: direct.elapsedMs,
+              errorText: direct.errorText,
+              ...summarizeOddsRows(direct.rows)
+            });
+          }
+        }
+      }
+
+      const metadataSummary = {};
+      const [bookCoverageSettled, sourceQualitySettled] = metadataCalls;
+      if (bookCoverageSettled?.status === 'fulfilled') {
+        metadataSummary.bookCoverage = {
+          status: bookCoverageSettled.value.status,
+          ok: bookCoverageSettled.value.ok,
+          rowCount: bookCoverageSettled.value.rows.length,
+          creditHeaders: bookCoverageSettled.value.creditHeaders,
+          sampleRows: bookCoverageSettled.value.rows.slice(0, 5).map(compactRow)
+        };
+      }
+      if (sourceQualitySettled?.status === 'fulfilled') {
+        metadataSummary.sourceQuality = {
+          status: sourceQualitySettled.value.status,
+          ok: sourceQualitySettled.value.ok,
+          rowCount: sourceQualitySettled.value.rows.length,
+          creditHeaders: sourceQualitySettled.value.creditHeaders,
+          sampleRows: sourceQualitySettled.value.rows.slice(0, 5).map(compactRow)
+        };
+      }
+
+      return res.status(200).json({
+        ok: true,
+        audit: auditDirect ? 'approved_book_direct_coverage' : 'approved_book_coverage',
+        pulledAt: new Date().toISOString(),
+        timeWindow,
+        requestedSports,
+        requestedBooks,
+        approvedBooks: FINAL_BOOK_KEYS,
+        removedBooks: REMOVED_BOOK_KEYS,
+        metadataSummary,
+        freshnessAudits,
+        eventAudits,
+        parserCoverageAudits,
+        allBooksOddsAudits,
+        directBookAudits,
+        directAuditNote: auditDirect
+          ? 'Direct bookmaker checks spend paid odds credits: 3 credits per sport/book for h2h,spreads,totals.'
+          : 'Direct bookmaker checks were not run. Add auditDirect=1&books=book1,book2&sports=sport_key to spend credits on targeted proof.',
+        checks: checks.map(({ rows, ...check }) => check)
+      });
+    }
 
     if (auditAccuracy) {
       const bookSet = [...new Set(ACCURACY_TARGETS.map(target => target.book))];
