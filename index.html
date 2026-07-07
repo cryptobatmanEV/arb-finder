@@ -158,6 +158,11 @@
     .book-actions { margin-left:auto; display:flex; gap:6px; }
     .tiny-btn { border:1px solid var(--border); background:rgba(255,255,255,.04); color:var(--dim); border-radius:999px; padding:4px 8px; font-size:.68rem; cursor:pointer; }
     .tiny-btn:hover { color:var(--text); border-color:var(--dim); }
+    .scan-health { margin: 12px 0 14px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: rgba(255,255,255,0.025); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--dim); font-size: 0.7rem; }
+    .scan-health strong { color: var(--text); font-weight: 700; }
+    .scan-health .ok { color: var(--green); }
+    .scan-health .warn { color: var(--yellow); }
+    .filter-note { margin: 10px 0 16px; padding: 10px 12px; border: 1px solid rgba(245,200,66,0.28); border-radius: 10px; background: rgba(245,200,66,0.06); color: rgba(245,200,66,0.92); font-size: 0.72rem; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
 
     /* OddsJam stake improvements */
     .oj-leg-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
@@ -3007,7 +3012,21 @@ function App() {
   const shownSportsbookCards = shownOpps.filter(o => opportunityPlatforms(o).some(platform => sportsbookSet.has(platform))).length;
   const shownPairCounts = topEntries(countOppsByPlatform(shownOpps), 20);
   const totalMkts = Object.values(markets).reduce((s,m) => s + m.length, 0);
-  const bestM = displayArbs.length > 0 ? displayArbs[0].margin : null;
+  const allFilteredOpps = [...displayArbs, ...displayNear].sort((a, b) => b.margin - a.margin);
+  const bestM = allFilteredOpps.length > 0 ? allFilteredOpps[0].margin : null;
+  const totalAvailableOpps = arbs.length + near.length;
+  const filtersActive = filter !== 'all' || sourceFilter !== 'all' || marketFilter !== 'all' || todayOnly || enabledBooks.length !== ALL_BOOK_FILTERS.length;
+  const hiddenByFilters = totalAvailableOpps > 0 && shownOpps.length === 0;
+  const noLiveButNear = displayArbs.length === 0 && displayNear.length > 0;
+  const resetFilters = () => {
+    setFilter('all');
+    setSourceFilter('all');
+    setMarketFilter('all');
+    setTodayOnly(false);
+    setEnabledBooks(ALL_BOOK_FILTERS);
+    setShowNear(true);
+    setNearOpen(true);
+  };
 
   const toggleBook = (book) => {
     setEnabledBooks(prev => prev.includes(book) ? prev.filter(b => b !== book) : [...prev, book]);
@@ -3107,6 +3126,7 @@ function App() {
             <button className="tiny-btn" onClick={() => setEnabledBooks(ALL_BOOK_FILTERS)}>All</button>
             <button className="tiny-btn" onClick={() => setEnabledBooks(CORE_PLATFORMS)}>Core only</button>
             <button className="tiny-btn" onClick={() => setEnabledBooks([])}>Clear</button>
+            <button className="tiny-btn" onClick={resetFilters}>Reset filters</button>
           </div>
         </div>
         <div className="book-grid">
@@ -3147,6 +3167,33 @@ function App() {
         </div>
       )}
 
+      {parlayDebug && (
+        <div className="scan-health">
+          <span><strong>Scan health</strong></span>
+          <span>sportsbook rows <strong>{parlayDebug.sportsbookMarketsNormalized || 0}</strong></span>
+          <span>board rows <strong>{parlayDebug.canonicalBoardRows || 0}</strong></span>
+          <span>cards <strong>{parlayDebug.groupedCardsAfterGrouping || totalAvailableOpps || 0}</strong></span>
+          <span>true arbs <strong className={arbs.length ? 'ok' : ''}>{arbs.length}</strong></span>
+          <span>near-arbs <strong className={near.length ? 'warn' : ''}>{near.length}</strong></span>
+          <span>sportsbooks <strong>{(parlayDebug.sportsbookPlatformsSeen || []).join(', ') || 'none'}</strong></span>
+          <button className="tiny-btn" onClick={resetFilters}>Reset filters</button>
+        </div>
+      )}
+
+      {hiddenByFilters && (
+        <div className="filter-note">
+          <span>{totalAvailableOpps} validated card{totalAvailableOpps === 1 ? '' : 's'} exist, but current filters hide all of them.</span>
+          <button className="tiny-btn" onClick={resetFilters}>Show all cards</button>
+        </div>
+      )}
+
+      {!showNear && near.length > 0 && displayArbs.length === 0 && (
+        <div className="filter-note">
+          <span>No true arbs are visible, but {near.length} near-arb card{near.length === 1 ? '' : 's'} are available.</span>
+          <button className="tiny-btn" onClick={() => { setShowNear(true); setNearOpen(true); }}>Show near-arbs</button>
+        </div>
+      )}
+
       {firstLoad && loading ? (
         <div className="cards">{[1,2,3].map(i=><div key={i} className="skel skel-card"/>)}</div>
       ) : (
@@ -3160,10 +3207,11 @@ function App() {
             ? <div className="cards">{displayArbs.map(o => <ArbCard key={o.id} opp={o} />)}</div>
             : <div className="empty">
                 <div className="empty-icon">◎</div>
-                <div>No arbitrage opportunities{filter !== 'all' ? ` in ${FILTER_LB[filter]}` : ''} right now.</div>
+                <div>{noLiveButNear ? 'No positive arbs after validation. Closest opportunities are below.' : `No arbitrage opportunities${filter !== 'all' ? ` in ${FILTER_LB[filter]}` : ''} right now.`}</div>
                 <div style={{marginTop:6,fontSize:'0.7rem',color:'var(--dimmer)'}}>
-                  {pairs} pairs matched across {totalMkts.toLocaleString()} markets · free books refresh every {REFRESH_SECS}s · sportsbook odds are manual
+                  {pairs} pairs matched across {totalMkts.toLocaleString()} markets · {near.length} near-arb card{near.length === 1 ? '' : 's'} · sportsbook odds are manual
                 </div>
+                {filtersActive && <button className="tiny-btn" onClick={resetFilters} style={{marginTop:10}}>Reset filters</button>}
               </div>
           }
 
