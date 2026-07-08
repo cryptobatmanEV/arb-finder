@@ -3050,6 +3050,7 @@ function App() {
   const shownSportsbookCards = shownOpps.filter(o => opportunityPlatforms(o).some(platform => sportsbookSet.has(platform))).length;
   const shownPairCounts = topEntries(countOppsByPlatform(shownOpps), 20);
   const totalMkts = Object.values(markets).reduce((s,m) => s + m.length, 0);
+  const propsLoaded = (markets.parlay || []).some(m => m.marketType === 'prop');
   const allFilteredOpps = [...displayArbs, ...displayNear].sort((a, b) => b.margin - a.margin);
   const bestM = allFilteredOpps.length > 0 ? allFilteredOpps[0].margin : null;
   const totalAvailableOpps = arbs.length + near.length;
@@ -3155,9 +3156,17 @@ function App() {
             {MARKET_FILTER_LB[f]}
           </button>
         ))}
-        <div className="near-toggle" onClick={() => setIncludeProps(v => !v)} title="Adds MLB player props from ParlayAPI on the next Refresh Odds click">
+        <div className="near-toggle" onClick={() => setIncludeProps(v => {
+          const next = !v;
+          if (next) {
+            setMarketFilter('props');
+            setShowNear(true);
+            setNearOpen(true);
+          }
+          return next;
+        })} title="Adds MLB player props from ParlayAPI on the next Refresh Odds click">
           <div className={`tswitch${includeProps?' on':''}`}><div className="tknob"/></div>
-          Include MLB props <span style={{color:'var(--dimmer)'}}>+3 credits</span>
+          Include MLB props <span style={{color:'var(--dimmer)'}}>+3 credits on refresh</span>
         </div>
       </div>
 
@@ -3219,6 +3228,15 @@ function App() {
           <span>near-arbs <strong className={near.length ? 'warn' : ''}>{near.length}</strong></span>
           <span>sportsbooks <strong>{(parlayDebug.sportsbookPlatformsSeen || []).join(', ') || 'none'}</strong></span>
           <button className="tiny-btn" onClick={resetFilters}>Reset filters</button>
+        </div>
+      )}
+
+      {includeProps && !propsLoaded && (
+        <div className="filter-note">
+          <span>Player props are enabled for the next sportsbook pull.</span>
+          <button className="tiny-btn" onClick={refreshOdds} disabled={loading || parlayLoading || refreshCooldown}>
+            Refresh Odds to load props
+          </button>
         </div>
       )}
 
