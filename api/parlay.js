@@ -142,6 +142,12 @@ const SAFE_MLB_PROP_MARKETS = new Set([
   'player_doubles',
   'player_singles',
   'player_stolen_bases',
+  'pitcher_outs',
+  'player_pitcher_outs',
+  'player_outs',
+  'player_outs_recorded',
+  'player_pitching_outs',
+  'pitcher_strikeouts',
   'player_pitcher_strikeouts',
   'player_strikeouts'
 ]);
@@ -155,6 +161,12 @@ const PROP_MARKET_LABELS = {
   player_doubles: 'Doubles',
   player_singles: 'Singles',
   player_stolen_bases: 'Stolen Bases',
+  pitcher_outs: 'Pitcher Outs',
+  player_pitcher_outs: 'Pitcher Outs',
+  player_outs: 'Player Outs',
+  player_outs_recorded: 'Outs Recorded',
+  player_pitching_outs: 'Pitching Outs',
+  pitcher_strikeouts: 'Strikeouts',
   player_pitcher_strikeouts: 'Strikeouts',
   player_strikeouts: 'Strikeouts'
 };
@@ -1167,7 +1179,7 @@ module.exports = async function handler(req, res) {
     const expandedSports = configuredList('PARLAY_EXPANDED_SPORTS', EXPANDED_SPORTS);
     const optionalSports = [...new Set([...expandedSports, ...soccerSports])];
     const candidateSports = [...new Set([...CORE_SPORTS, ...optionalSports])];
-    const creditBudget = maxCreditsPerRefresh();
+    const creditBudget = maxCreditsPerRefresh() + (includeProps ? 3 : 0);
     let activeSportKeys = [];
     let eventPrecheckRows = {};
     const planningDebug = {

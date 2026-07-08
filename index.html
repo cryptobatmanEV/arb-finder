@@ -253,8 +253,8 @@ const FILTERS  = ['all','mlb','wnba','nba','nfl','ncaaf','ncaab','nhl','soccer',
 const FILTER_LB = { all:'All', mlb:'MLB', wnba:'WNBA', nba:'NBA', nfl:'NFL', ncaaf:'NCAAF', ncaab:'NCAAB', nhl:'NHL', soccer:'Soccer', crypto:'Crypto', other:'Other' };
 const SOURCE_FILTERS = ['all','core','sportsbook','exchange'];
 const SOURCE_FILTER_LB = { all:'All', core:'Core only', sportsbook:'Sportsbook only', exchange:'Exchange only' };
-const MARKET_FILTERS = ['all','main','moneyline','spread','total'];
-const MARKET_FILTER_LB = { all:'All', main:'Main Lines', moneyline:'Moneyline', spread:'Spread', total:'Total' };
+const MARKET_FILTERS = ['all','main','props','moneyline','spread','total'];
+const MARKET_FILTER_LB = { all:'All', main:'Main Lines', props:'Player Props', moneyline:'Moneyline', spread:'Spread', total:'Total' };
 const BOARD_SPORTS = new Set(['mlb','wnba','nba','nfl','ncaaf','ncaab','nhl','soccer']);
 
 // ─── TEAM NORMALIZATION ───────────────────────────────────────────────────────
@@ -2000,6 +2000,12 @@ function canonicalSideIdentity(leg) {
     const ou = /^over\b/i.test(label) ? 'over' : /^under\b/i.test(label) ? 'under' : label;
     return `total:${ou}:${Number(line)}`;
   }
+  if (marketType === 'prop') {
+    const ou = /^over\b/i.test(label) || /\bover\b/i.test(label) ? 'over'
+      : /^under\b/i.test(label) || /\bunder\b/i.test(label) ? 'under'
+      : label;
+    return `prop:${leg?.player || ''}:${leg?.statType || ''}:${Number(line)}:${ou}`;
+  }
   return label;
 }
 
@@ -2030,6 +2036,12 @@ function marketMatchesGroupedOpp(market, opp) {
     if (market.line == null || line == null) return false;
     return Math.abs(Number(market.line) - Number(line)) <= 0.001;
   }
+  if (opp.marketType === 'prop') {
+    if (market.line == null || line == null) return false;
+    return Math.abs(Number(market.line) - Number(line)) <= 0.001
+      && String(market.player || '').toLowerCase() === String(opp.player || opp.legA?.player || '').toLowerCase()
+      && String(market.statType || '').toLowerCase() === String(opp.statType || opp.legA?.statType || '').toLowerCase();
+  }
   return false;
 }
 
@@ -2051,7 +2063,9 @@ function marketSideLeg(market, outcome) {
     gameKey: market.gameKey,
     marketType: market.marketType,
     lineType: market.lineType || 'main',
-    line: market.line ?? null
+    line: market.line ?? null,
+    player: market.player || null,
+    statType: market.statType || null
   };
 }
 
@@ -2117,7 +2131,7 @@ function isLiveGameTime(rawTime) {
 function canonicalBoardRows(markets) {
   const rows = [];
   (markets || []).forEach(market => {
-    if (!['moneyline', 'spread', 'total'].includes(market?.marketType)) return;
+    if (!['moneyline', 'spread', 'total', 'prop'].includes(market?.marketType)) return;
     ['YES', 'NO'].forEach(outcome => {
       const leg = marketSideLeg(market, outcome);
       if (!leg || !leg.price || leg.price <= 0 || leg.price >= 1) return;
@@ -2137,6 +2151,8 @@ function canonicalBoardRows(markets) {
         marketType: market.marketType,
         lineType: market.lineType || 'main',
         line: market.line ?? null,
+        player: market.player || null,
+        statType: market.statType || null,
         sideKey: canonicalSideIdentity(leg),
         exactBet,
         outcome,
@@ -2158,7 +2174,9 @@ function boardGroupKey(row) {
     row.eventKey,
     row.marketType,
     row.lineType || 'main',
-    row.line ?? ''
+    row.line ?? '',
+    row.marketType === 'prop' ? row.player || '' : '',
+    row.marketType === 'prop' ? row.statType || '' : ''
   ].map(v => String(v || '').toLowerCase()).join('|');
 }
 
@@ -2197,6 +2215,8 @@ function boardRowToLeg(row, stake = 0) {
     marketType: row.marketType,
     lineType: row.lineType || 'main',
     line: row.line,
+    player: row.player || null,
+    statType: row.statType || null,
     sourceProof: {
       ...(row.sourceProof || {}),
       displayedBook: row.book,
@@ -2256,7 +2276,9 @@ function boardRowsToOpportunities(boardRows) {
     const stakeA = BASE_STAKE * best.a.price / denom;
     const stakeB = BASE_STAKE * best.b.price / denom;
     const profit = isArb ? BASE_STAKE * (1 / denom - 1) : 0;
-    const title = best.a.title || best.b.title || 'MLB market';
+    const title = best.a.marketType === 'prop'
+      ? `${best.a.player || 'Player'} ${best.a.statType || 'prop'}`
+      : best.a.title || best.b.title || 'MLB market';
     const isAltLine = (best.a.lineType || 'main') === 'alt';
     const lineStr = best.a.line != null ? ` (${isAltLine ? 'alt ' : ''}${best.a.marketType === 'spread' ? 'spread ' : 'O/U '}${best.a.line})` : '';
     const opp = {
@@ -2266,6 +2288,8 @@ function boardRowsToOpportunities(boardRows) {
       sport: best.a.sport,
       marketType: best.a.marketType,
       lineType: best.a.lineType || 'main',
+      player: best.a.player || null,
+      statType: best.a.statType || null,
       legA: boardRowToLeg(best.a, stakeA),
       legB: boardRowToLeg(best.b, stakeB),
       matchGroupKey: boardGroupKey(best.a),
@@ -2426,6 +2450,14 @@ function displayBetLabel(leg) {
     const ou = String(leg?.rawTitle || '').match(/O\/U\s*([\d.]+)/i);
     if (ou) return leg?.outcome === 'YES' ? `Over ${ou[1]}` : `Under ${ou[1]}`;
     return line != null ? `${leg?.outcome === 'YES' ? 'Over' : 'Under'} ${line}` : side;
+  }
+
+  if (marketType === 'prop') {
+    const rawPlayer = leg?.player || String(side || '').replace(/\b(over|under)\b.*$/i, '').trim();
+    const player = cleanTeamLabel(rawPlayer);
+    const stat = String(leg?.statType || '').replace(/^player_/, '').replace(/_/g, ' ');
+    const direction = leg?.outcome === 'YES' ? 'Over' : 'Under';
+    return `${player} ${direction} ${line} ${stat}`.replace(/\s+/g, ' ').trim();
   }
 
   return cleanTeamLabel(side) || humanOutcome(leg?.rawTitle, leg?.outcome);
@@ -2802,6 +2834,7 @@ function App() {
   const [sourceFilter, setSourceFilter] = useState('all');
   const [marketFilter, setMarketFilter] = useState('all');
   const [todayOnly, setTodayOnly] = useState(false);
+  const [includeProps, setIncludeProps] = useState(() => localStorage.getItem('includeProps') === '1');
   const [enabledBooks, setEnabledBooks] = useState(() => {
     try { return JSON.parse(localStorage.getItem('enabledBooks') || 'null') || ALL_BOOK_FILTERS; }
     catch (_) { return ALL_BOOK_FILTERS; }
@@ -2822,6 +2855,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem('enabledBooks', JSON.stringify(enabledBooks));
   }, [enabledBooks]);
+
+  useEffect(() => {
+    localStorage.setItem('includeProps', includeProps ? '1' : '0');
+  }, [includeProps]);
 
   const recalc = useCallback((mkts) => {
     const allStructured = [...mkts.polymarket, ...mkts.kalshi, ...mkts.novig, ...mkts.fliff, ...mkts.parlay];
@@ -2929,7 +2966,7 @@ function App() {
     setParlayLoading(true);
     setStatus(prev => ({ ...prev, parlay:'loading' }));
     try {
-      const d = await fetchParlay({ forceFresh: true });
+      const d = await fetchParlay({ forceFresh: true, includeProps });
       if (d.length === 0 && (parlayRef.current || []).length > 0) {
         throw new Error('Sportsbook refresh returned zero markets; keeping previous successful load');
       }
@@ -2949,7 +2986,7 @@ function App() {
     } finally {
       setParlayLoading(false);
     }
-  }, [markets, recalc]);
+  }, [markets, recalc, includeProps]);
 
   const refreshOdds = useCallback(async () => {
     if (loading || parlayLoading || refreshCooldown) return;
@@ -3000,6 +3037,7 @@ function App() {
   };
   const visibleByMarket = (o) => {
     if (marketFilter === 'main') return (o.lineType || 'main') === 'main' && ['moneyline','spread','total'].includes(o.marketType);
+    if (marketFilter === 'props') return o.marketType === 'prop';
     if (['moneyline','spread','total'].includes(marketFilter)) return o.marketType === marketFilter;
     return true;
   };
@@ -3117,6 +3155,10 @@ function App() {
             {MARKET_FILTER_LB[f]}
           </button>
         ))}
+        <div className="near-toggle" onClick={() => setIncludeProps(v => !v)} title="Adds MLB player props from ParlayAPI on the next Refresh Odds click">
+          <div className={`tswitch${includeProps?' on':''}`}><div className="tknob"/></div>
+          Include MLB props <span style={{color:'var(--dimmer)'}}>+3 credits</span>
+        </div>
       </div>
 
       <div className="book-filters">
