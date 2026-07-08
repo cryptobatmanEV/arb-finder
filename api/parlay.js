@@ -446,8 +446,8 @@ function supplementalMlbBooks() {
 }
 
 function maxCreditsPerRefresh() {
-  const raw = Number(process.env.PARLAY_MAX_CREDITS_PER_REFRESH || 33);
-  return Number.isFinite(raw) && raw > 0 ? raw : 33;
+  const raw = Number(process.env.PARLAY_MAX_CREDITS_PER_REFRESH || 36);
+  return Number.isFinite(raw) && raw > 0 ? raw : 36;
 }
 
 function estimatedCredits(call) {
