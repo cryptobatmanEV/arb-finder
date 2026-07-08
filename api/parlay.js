@@ -1150,6 +1150,18 @@ function listFromPayload(payload) {
   return [];
 }
 
+function summarizePropRows(rows) {
+  const marketKeys = {};
+  const books = {};
+  for (const row of rows || []) {
+    const marketKey = String(row.market_key || 'missing').toLowerCase();
+    const book = normalizeBookKey(row.bookmaker || row.bookmaker_key || row.bookmakerKey || 'missing');
+    marketKeys[marketKey] = (marketKeys[marketKey] || 0) + 1;
+    books[book] = (books[book] || 0) + 1;
+  }
+  return { marketKeys, books };
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   let forceFresh = false;
@@ -1485,6 +1497,7 @@ module.exports = async function handler(req, res) {
           ok: true,
           rows: rows.length,
           rawRows: allRows.length,
+          rawSummary: summarizePropRows(rows),
           normalized: normalizedProps.length,
           added
         });
