@@ -152,7 +152,26 @@ const SAFE_PROP_MARKETS_BY_SPORT = {
   'player_pitcher_strikeouts',
   'player_strikeouts'
   ]),
-  basketball_wnba: new Set([])
+  basketball_wnba: new Set([
+    'player_points',
+    'player_rebounds',
+    'player_assists',
+    'player_threes',
+    'player_three_pointers_made',
+    'player_blocks',
+    'player_steals',
+    'player_turnovers',
+    'player_pts_rebs',
+    'player_points_rebounds',
+    'player_pts_asts',
+    'player_points_assists',
+    'player_rebs_asts',
+    'player_assists_rebounds',
+    'player_pra',
+    'player_pts_rebs_asts',
+    'player_points_rebounds_assists',
+    'player_steals_blocks'
+  ])
 };
 
 const PROP_MARKET_LABELS = {
@@ -171,8 +190,45 @@ const PROP_MARKET_LABELS = {
   player_pitching_outs: 'Pitching Outs',
   pitcher_strikeouts: 'Strikeouts',
   player_pitcher_strikeouts: 'Strikeouts',
-  player_strikeouts: 'Strikeouts'
+  player_strikeouts: 'Strikeouts',
+  player_points: 'Points',
+  player_rebounds: 'Rebounds',
+  player_assists: 'Assists',
+  player_threes: 'Threes',
+  player_three_pointers_made: 'Threes',
+  player_blocks: 'Blocks',
+  player_steals: 'Steals',
+  player_turnovers: 'Turnovers',
+  player_pts_rebs: 'Points + Rebounds',
+  player_points_rebounds: 'Points + Rebounds',
+  player_pts_asts: 'Points + Assists',
+  player_points_assists: 'Points + Assists',
+  player_rebs_asts: 'Rebounds + Assists',
+  player_assists_rebounds: 'Rebounds + Assists',
+  player_pra: 'Points + Rebounds + Assists',
+  player_pts_rebs_asts: 'Points + Rebounds + Assists',
+  player_points_rebounds_assists: 'Points + Rebounds + Assists',
+  player_steals_blocks: 'Steals + Blocks'
 };
+
+function canonicalPropMarketKey(marketKey) {
+  const key = String(marketKey || '').toLowerCase();
+  const aliases = {
+    pitcher_outs: 'player_outs',
+    player_pitcher_outs: 'player_outs',
+    player_outs_recorded: 'player_outs',
+    player_pitching_outs: 'player_outs',
+    pitcher_strikeouts: 'player_strikeouts',
+    player_pitcher_strikeouts: 'player_strikeouts',
+    player_three_pointers_made: 'player_threes',
+    player_points_rebounds: 'player_pts_rebs',
+    player_points_assists: 'player_pts_asts',
+    player_assists_rebounds: 'player_rebs_asts',
+    player_pra: 'player_pts_rebs_asts',
+    player_points_rebounds_assists: 'player_pts_rebs_asts'
+  };
+  return aliases[key] || key;
+}
 
 function getLookaheadDays(req) {
   const fallback = Number(process.env.PARLAY_LOOKAHEAD_DAYS || 5);
@@ -1045,7 +1101,8 @@ function normalizePropRow(row, sport, debug, meta = {}) {
     return null;
   }
 
-  const label = PROP_MARKET_LABELS[marketKey] || marketKey.replace(/^player_/, '').replace(/_/g, ' ');
+  const canonicalMarketKey = canonicalPropMarketKey(marketKey);
+  const label = PROP_MARKET_LABELS[canonicalMarketKey] || PROP_MARKET_LABELS[marketKey] || canonicalMarketKey.replace(/^player_/, '').replace(/_/g, ' ');
   return {
     id: `${row.event_id || row.id || `${away}-${home}-${startTime}`}-${platform}-${marketKey}-${player}-${line}`,
     source: 'parlay',
@@ -1059,7 +1116,7 @@ function normalizePropRow(row, sport, debug, meta = {}) {
     startTime,
     line: Number(line),
     player: player.toLowerCase(),
-    statType: marketKey,
+    statType: canonicalMarketKey,
     yesPrice,
     noPrice,
     sourceProof: {
@@ -1073,7 +1130,7 @@ function normalizePropRow(row, sport, debug, meta = {}) {
         rawOutcomeName: 'Over',
         rawOutcomePrice: row.over_price ?? null,
         rawOutcomePoint: line,
-        normalizedSide: `${player} over ${line} ${marketKey}`,
+        normalizedSide: `${player} over ${line} ${canonicalMarketKey}`,
         normalizedAmerican: row.over_price ?? null,
         rawCommenceTime: startTime,
         displayedDate: String(startTime || '').slice(0, 10),
@@ -1093,7 +1150,7 @@ function normalizePropRow(row, sport, debug, meta = {}) {
         rawOutcomeName: 'Under',
         rawOutcomePrice: row.under_price ?? null,
         rawOutcomePoint: line,
-        normalizedSide: `${player} under ${line} ${marketKey}`,
+        normalizedSide: `${player} under ${line} ${canonicalMarketKey}`,
         normalizedAmerican: row.under_price ?? null,
         rawCommenceTime: startTime,
         displayedDate: String(startTime || '').slice(0, 10),
