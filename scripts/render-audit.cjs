@@ -1,6 +1,8 @@
 const https = require('https');
 
-const ORIGIN = process.argv[2] || 'https://arb-finder-sooty.vercel.app';
+const args = process.argv.slice(2);
+const INCLUDE_PROPS = args.includes('--props') || process.env.RENDER_AUDIT_PROPS === '1';
+const ORIGIN = args.find(arg => !arg.startsWith('--')) || 'https://arb-finder-sooty.vercel.app';
 const NEAR_ARB_BAND = Number(process.env.RENDER_AUDIT_NEAR_ARB_BAND || 0.05);
 const APPROVED = [
   'fanduel', 'draftkings', 'betmgm', 'caesars', 'bovada', 'bet365',
@@ -146,7 +148,7 @@ function parseKalshiTicker(ticker) {
   return null;
 }
 
-function boardRow({ platform, endpoint, rawEventId, rawCommenceTime, home, away, sport = 'mlb', marketType, lineType = 'main', side, line, price, rawPrice, rawPriceType, rawMarketKey, lastUpdate, fetchTimestamp, rawTitle }) {
+function boardRow({ platform, endpoint, rawEventId, rawCommenceTime, home, away, sport = 'mlb', marketType, lineType = 'main', side, line, price, rawPrice, rawPriceType, rawMarketKey, lastUpdate, fetchTimestamp, rawTitle, player, statType }) {
   const homeAbbr = abbr(home);
   const awayAbbr = abbr(away);
   const eventDate = rawCommenceTime ? String(rawCommenceTime).slice(0, 10) : null;
@@ -176,6 +178,8 @@ function boardRow({ platform, endpoint, rawEventId, rawCommenceTime, home, away,
     lineType,
     side,
     line: line ?? null,
+    player: player || null,
+    statType: statType || null,
     rawPriceField: rawPrice,
     rawPriceType,
     normalizedAmericanOdds: price,
@@ -197,7 +201,7 @@ function isLiveGameTime(rawTime) {
 function parlayRows(markets, fetchTimestamp) {
   const rows = [];
   (markets || []).filter(m => APPROVED.includes(m.platform)).forEach(m => {
-    const base = { platform: m.platform, endpoint: m.sourceProof?.YES?.sourceEndpoint || '/api/parlay', rawEventId: m.sourceProof?.YES?.rawEventId || m.id, rawCommenceTime: m.startTime, home: m.home, away: m.away, sport: m.sport || 'mlb', marketType: m.marketType, lineType: m.lineType || 'main', line: m.line ?? null, rawMarketKey: m.sourceProof?.YES?.rawMarketKey || m.marketType, fetchTimestamp, rawTitle: m.rawTitle };
+    const base = { platform: m.platform, endpoint: m.sourceProof?.YES?.sourceEndpoint || '/api/parlay', rawEventId: m.sourceProof?.YES?.rawEventId || m.id, rawCommenceTime: m.startTime, home: m.home, away: m.away, sport: m.sport || 'mlb', marketType: m.marketType, lineType: m.lineType || 'main', line: m.line ?? null, rawMarketKey: m.sourceProof?.YES?.rawMarketKey || m.marketType, fetchTimestamp, rawTitle: m.rawTitle, player: m.player || null, statType: m.statType || null };
     const label = (proof, fallbackSide) => {
       const side = proof?.normalizedSide?.replace(/\s+wins$/i, '') || fallbackSide;
       if (m.marketType === 'moneyline') return `${side} moneyline`;
@@ -262,13 +266,33 @@ function kalshiRows(markets, fetchTimestamp) {
 }
 
 function sideKey(row) {
-  return String(row.side || '').toLowerCase().replace(/\s+moneyline$/i, '').replace(/\s+/g, ' ').trim();
+  const side = String(row.side || '').toLowerCase().replace(/\s+moneyline$/i, '').replace(/\s+/g, ' ').trim();
+  if (row.marketType === 'prop') {
+    return [
+      row.player || '',
+      row.statType || '',
+      row.line ?? '',
+      /^under\b/.test(side) ? 'under' : /^over\b/.test(side) ? 'over' : side
+    ].map(v => String(v || '').toLowerCase().trim()).join('|');
+  }
+  return side;
+}
+
+function rowGroupKey(row) {
+  return [
+    row.normalizedEventKey,
+    row.marketType,
+    row.lineType || 'main',
+    row.line ?? '',
+    row.marketType === 'prop' ? row.player || '' : '',
+    row.marketType === 'prop' ? row.statType || '' : ''
+  ].map(v => String(v || '').toLowerCase().replace(/\s+/g, ' ').trim()).join('|');
 }
 
 function matchBoard(rows) {
   const groups = new Map();
   rows.forEach(row => {
-    const key = [row.normalizedEventKey, row.marketType, row.lineType || 'main', row.line ?? ''].join('|');
+    const key = rowGroupKey(row);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(row);
   });
@@ -311,7 +335,7 @@ function matchBoard(rows) {
 function marginDistribution(rows) {
   const groups = new Map();
   rows.forEach(row => {
-    const key = [row.normalizedEventKey, row.marketType, row.lineType || 'main', row.line ?? ''].join('|');
+    const key = rowGroupKey(row);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(row);
   });
@@ -358,6 +382,8 @@ function marginDistribution(rows) {
       sport: best.a.sport,
       marketType: best.a.marketType,
       lineType: best.a.lineType || 'main',
+      player: best.a.player || null,
+      statType: best.a.statType || null,
       margin: (1 - best.sum) * 100,
       main: [best.a, best.b],
       sideCounts: [aRows.length, bRows.length]
@@ -380,6 +406,8 @@ function marginDistribution(rows) {
       sport: row.sport,
       marketType: row.marketType,
       lineType: row.lineType,
+      player: row.player || null,
+      statType: row.statType || null,
       margin: Number(row.margin.toFixed(2)),
       main: row.main.map(item => `${item.platform}: ${item.side} ${item.normalizedAmericanOdds}`),
       sideCounts: row.sideCounts
@@ -400,8 +428,9 @@ function priceExamples(rows, platform, limit = 3) {
 
 (async () => {
   const fetchTimestamp = new Date().toISOString();
+  const parlayPath = `/api/parlay?fresh=1&days=5${INCLUDE_PROPS ? '&props=1' : ''}&_renderAudit=${Date.now()}`;
   const [parlay, polymarket, kalshi] = await Promise.all([
-    fetchJson(`/api/parlay?fresh=1&days=5&_renderAudit=${Date.now()}`),
+    fetchJson(parlayPath),
     fetchJson(`/api/polymarket?_renderAudit=${Date.now()}`),
     fetchJson(`/api/kalshi?_renderAudit=${Date.now()}`)
   ]);
@@ -415,7 +444,7 @@ function priceExamples(rows, platform, limit = 3) {
   const seenBooks = new Set(rows.map(row => row.platform));
   const renderedMarketKeys = new Set(cards.map(card => card.key));
   const booksExpectedInRenderedMarkets = new Set(rows
-    .filter(row => renderedMarketKeys.has([row.normalizedEventKey, row.marketType, row.lineType || 'main', row.line ?? ''].join('|')))
+    .filter(row => renderedMarketKeys.has(rowGroupKey(row)))
     .map(row => row.platform));
   const disappearedSportsbooks = [...booksExpectedInRenderedMarkets].filter(book => SPORTSBOOK.has(book) && !visibleBooks.has(book));
   const atlSdRows = rows.filter(row => /atl|braves/i.test(row.normalizedEventKey + row.side + row.rawTitle) && /sd|padres/i.test(row.normalizedEventKey + row.side + row.rawTitle));
@@ -424,6 +453,9 @@ function priceExamples(rows, platform, limit = 3) {
   const nyyDetWrongDate = nyyDetRows.filter(row => String(row.displayedLocalDate || '').startsWith('2026-07-01'));
   const output = {
     origin: ORIGIN,
+    includeProps: INCLUDE_PROPS,
+    parlayPath,
+    parlayRawCount: parlay.json.count ?? (parlay.json.markets || []).length,
     canonicalBoardRows: rows.length,
     canonicalBoardRowsByBook: countBy(rows, row => row.platform),
     canonicalBoardRowsByLineType: countBy(rows, row => row.lineType || 'main'),
@@ -432,6 +464,7 @@ function priceExamples(rows, platform, limit = 3) {
     groupedCardCount: cards.length,
     marginDistribution: marginDistribution(rows),
     groupedCardCountByLineType: countBy(cards, card => (card.main?.[0]?.lineType || 'main')),
+    groupedCardCountByMarket: countBy(cards, card => card.main?.[0]?.marketType || 'unknown'),
     duplicateCardCount: duplicateKeys.length,
     liveArbCount: cards.filter(c => c.isArb).length,
     nearArbCount: cards.filter(c => !c.isArb).length,
