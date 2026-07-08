@@ -1355,9 +1355,6 @@ module.exports = async function handler(req, res) {
         }
       });
     }
-    for (const sport of delayedCoreSports) {
-      maybeAddSportOddsCall(sport);
-    }
     if (includeProps) {
       maybeAddCall({
         kind: 'props',
@@ -1369,6 +1366,9 @@ module.exports = async function handler(req, res) {
           commenceTimeTo: timeWindow.commenceTimeTo
         }
       });
+    }
+    for (const sport of delayedCoreSports) {
+      maybeAddSportOddsCall(sport);
     }
     planningDebug.plannedCreditEstimate = plannedCreditEstimate;
 
