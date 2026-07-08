@@ -133,7 +133,8 @@ const MLB_ALL_BOOKS_ODDS_ENABLED = process.env.PARLAY_MLB_ALL_BOOKS_ODDS !== '0'
 const ODDS_INCLUDE = process.env.PARLAY_ODDS_INCLUDE || 'verification';
 const LOW_PRIORITY_CORE_SPORTS = new Set(['icehockey_nhl']);
 
-const SAFE_MLB_PROP_MARKETS = new Set([
+const SAFE_PROP_MARKETS_BY_SPORT = {
+  baseball_mlb: new Set([
   'player_hits',
   'player_total_bases',
   'player_rbis',
@@ -150,7 +151,9 @@ const SAFE_MLB_PROP_MARKETS = new Set([
   'pitcher_strikeouts',
   'player_pitcher_strikeouts',
   'player_strikeouts'
-]);
+  ]),
+  basketball_wnba: new Set([])
+};
 
 const PROP_MARKET_LABELS = {
   player_hits: 'Hits',
@@ -1025,7 +1028,8 @@ function normalizePropRow(row, sport, debug, meta = {}) {
     noteSkip(debug, `unsupported_book_${platform}`);
     return null;
   }
-  if (!SAFE_MLB_PROP_MARKETS.has(marketKey)) {
+  const safePropMarkets = SAFE_PROP_MARKETS_BY_SPORT[sport] || new Set();
+  if (!safePropMarkets.has(marketKey)) {
     noteSkip(debug, `prop_unsupported_market_${marketKey || 'missing'}`);
     return null;
   }
@@ -1179,7 +1183,8 @@ module.exports = async function handler(req, res) {
     const expandedSports = configuredList('PARLAY_EXPANDED_SPORTS', EXPANDED_SPORTS);
     const optionalSports = [...new Set([...expandedSports, ...soccerSports])];
     const candidateSports = [...new Set([...CORE_SPORTS, ...optionalSports])];
-    const creditBudget = maxCreditsPerRefresh() + (includeProps ? 3 : 0);
+    const propSports = includeProps ? ['baseball_mlb', 'basketball_wnba'] : [];
+    const creditBudget = maxCreditsPerRefresh() + (propSports.length * 3);
     let activeSportKeys = [];
     let eventPrecheckRows = {};
     const planningDebug = {
@@ -1355,11 +1360,15 @@ module.exports = async function handler(req, res) {
         }
       });
     }
-    if (includeProps) {
+    for (const propSport of propSports) {
+      if (eventPrecheckRows[propSport] === 0) {
+        planningDebug.skippedSports.push({ sport: propSport, reason: 'no_events_in_lookahead_window_for_props' });
+        continue;
+      }
       maybeAddCall({
         kind: 'props',
-        sport: 'baseball_mlb',
-        endpoint: '/sports/baseball_mlb/props',
+        sport: propSport,
+        endpoint: `/sports/${propSport}/props`,
         params: {
           oddsFormat: 'american',
           commenceTimeFrom: timeWindow.commenceTimeFrom,
