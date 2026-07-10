@@ -2844,6 +2844,12 @@ function App() {
     return localStorage.getItem('includeProps') !== '0';
   });
   const [enabledBooks, setEnabledBooks] = useState(() => {
+    const defaultVersion = 'all-books-v2';
+    if (localStorage.getItem('enabledBooksDefaultVersion') !== defaultVersion) {
+      localStorage.setItem('enabledBooksDefaultVersion', defaultVersion);
+      localStorage.setItem('enabledBooks', JSON.stringify(ALL_BOOK_FILTERS));
+      return ALL_BOOK_FILTERS;
+    }
     try { return JSON.parse(localStorage.getItem('enabledBooks') || 'null') || ALL_BOOK_FILTERS; }
     catch (_) { return ALL_BOOK_FILTERS; }
   });
@@ -3070,6 +3076,8 @@ function App() {
   const allFilteredOpps = [...displayArbs, ...displayNear].sort((a, b) => b.margin - a.margin);
   const bestM = allFilteredOpps.length > 0 ? allFilteredOpps[0].margin : null;
   const totalAvailableOpps = arbs.length + near.length;
+  const hiddenLiveArbs = Math.max(0, arbs.length - displayArbs.length);
+  const hiddenNearArbs = Math.max(0, near.length - displayNear.length);
   const filtersActive = filter !== 'all' || sourceFilter !== 'all' || marketFilter !== 'all' || todayOnly || enabledBooks.length !== ALL_BOOK_FILTERS.length;
   const hiddenByFilters = totalAvailableOpps > 0 && shownOpps.length === 0;
   const noLiveButNear = displayArbs.length === 0 && displayNear.length > 0;
@@ -3240,10 +3248,19 @@ function App() {
           <span>sportsbook rows <strong>{parlayDebug.sportsbookMarketsNormalized || 0}</strong></span>
           <span>board rows <strong>{parlayDebug.canonicalBoardRows || 0}</strong></span>
           <span>cards <strong>{parlayDebug.groupedCardsAfterGrouping || totalAvailableOpps || 0}</strong></span>
-          <span>true arbs <strong className={arbs.length ? 'ok' : ''}>{arbs.length}</strong></span>
-          <span>near-arbs <strong className={near.length ? 'warn' : ''}>{near.length}</strong></span>
+          <span>true arbs <strong className={displayArbs.length ? 'ok' : ''}>{displayArbs.length}</strong>/<strong>{arbs.length}</strong></span>
+          <span>near-arbs <strong className={displayNear.length ? 'warn' : ''}>{displayNear.length}</strong>/<strong>{near.length}</strong></span>
+          {filtersActive && <span>hidden by filters <strong>{hiddenLiveArbs}</strong> arbs / <strong>{hiddenNearArbs}</strong> near</span>}
+          {filtersActive && <span>active filters <strong>{[filter, sourceFilter, marketFilter, todayOnly ? 'today' : null, enabledBooks.length !== ALL_BOOK_FILTERS.length ? `${enabledBooks.length}/${ALL_BOOK_FILTERS.length} books` : null].filter(Boolean).join(' / ')}</strong></span>}
           <span>sportsbooks <strong>{(parlayDebug.sportsbookPlatformsSeen || []).join(', ') || 'none'}</strong></span>
           <button className="tiny-btn" onClick={resetFilters}>Reset filters</button>
+        </div>
+      )}
+
+      {filtersActive && hiddenLiveArbs > 0 && (
+        <div className="filter-note">
+          <span>{hiddenLiveArbs} true arb card{hiddenLiveArbs === 1 ? '' : 's'} are currently hidden by filters.</span>
+          <button className="tiny-btn" onClick={resetFilters}>Show all cards</button>
         </div>
       )}
 
