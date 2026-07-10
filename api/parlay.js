@@ -136,21 +136,39 @@ const LOW_PRIORITY_CORE_SPORTS = new Set(['icehockey_nhl']);
 const SAFE_PROP_MARKETS_BY_SPORT = {
   baseball_mlb: new Set([
   'player_hits',
+  'player_hits_alt',
   'player_total_bases',
+  'player_total_bases_alt',
   'player_rbis',
+  'player_runs_batted_in',
   'player_hits_runs_rbis',
+  'player_hits_runs_runs_batted_in',
   'player_runs',
+  'player_runs_alt',
   'player_doubles',
   'player_singles',
   'player_stolen_bases',
+  'player_stolen_bases_alt',
+  'player_home_runs',
+  'player_home_runs_alt',
+  'player_triples',
+  'player_walks',
+  'player_batter_walks',
   'pitcher_outs',
   'player_pitcher_outs',
   'player_outs',
   'player_outs_recorded',
   'player_pitching_outs',
+  'player_total_outs',
   'pitcher_strikeouts',
   'player_pitcher_strikeouts',
-  'player_strikeouts'
+  'player_strikeouts',
+  'player_strikeouts_alt',
+  'player_hitter_strikeouts',
+  'player_earned_runs',
+  'player_hits_allowed',
+  'player_walks_allowed',
+  'player_pitching_walks'
   ]),
   basketball_wnba: new Set([
     'player_points',
@@ -170,27 +188,54 @@ const SAFE_PROP_MARKETS_BY_SPORT = {
     'player_pra',
     'player_pts_rebs_asts',
     'player_points_rebounds_assists',
-    'player_steals_blocks'
+    'player_steals_blocks',
+    'player_field_goals_attempted',
+    'player_field_goals_made',
+    'player_three_pointers_attempted',
+    'player_two_pointers_attempts',
+    'player_two_pointers_made',
+    'player_offensive_rebounds',
+    'player_defensive_rebounds',
+    'player_free_throws_attempted',
+    'player_free_throws_made'
   ])
 };
 
 const PROP_MARKET_LABELS = {
   player_hits: 'Hits',
+  player_hits_alt: 'Hits',
   player_total_bases: 'Total Bases',
+  player_total_bases_alt: 'Total Bases',
   player_rbis: 'RBIs',
+  player_runs_batted_in: 'RBIs',
   player_hits_runs_rbis: 'Hits + Runs + RBIs',
+  player_hits_runs_runs_batted_in: 'Hits + Runs + RBIs',
   player_runs: 'Runs',
+  player_runs_alt: 'Runs',
   player_doubles: 'Doubles',
   player_singles: 'Singles',
   player_stolen_bases: 'Stolen Bases',
+  player_stolen_bases_alt: 'Stolen Bases',
+  player_home_runs: 'Home Runs',
+  player_home_runs_alt: 'Home Runs',
+  player_triples: 'Triples',
+  player_walks: 'Walks',
+  player_batter_walks: 'Walks',
   pitcher_outs: 'Pitcher Outs',
   player_pitcher_outs: 'Pitcher Outs',
   player_outs: 'Player Outs',
   player_outs_recorded: 'Outs Recorded',
   player_pitching_outs: 'Pitching Outs',
+  player_total_outs: 'Pitcher Outs',
   pitcher_strikeouts: 'Strikeouts',
   player_pitcher_strikeouts: 'Strikeouts',
   player_strikeouts: 'Strikeouts',
+  player_strikeouts_alt: 'Strikeouts',
+  player_hitter_strikeouts: 'Batter Strikeouts',
+  player_earned_runs: 'Earned Runs',
+  player_hits_allowed: 'Hits Allowed',
+  player_walks_allowed: 'Walks Allowed',
+  player_pitching_walks: 'Walks Allowed',
   player_points: 'Points',
   player_rebounds: 'Rebounds',
   player_assists: 'Assists',
@@ -208,7 +253,16 @@ const PROP_MARKET_LABELS = {
   player_pra: 'Points + Rebounds + Assists',
   player_pts_rebs_asts: 'Points + Rebounds + Assists',
   player_points_rebounds_assists: 'Points + Rebounds + Assists',
-  player_steals_blocks: 'Steals + Blocks'
+  player_steals_blocks: 'Steals + Blocks',
+  player_field_goals_attempted: 'Field Goals Attempted',
+  player_field_goals_made: 'Field Goals Made',
+  player_three_pointers_attempted: 'Threes Attempted',
+  player_two_pointers_attempts: 'Two-Pointers Attempted',
+  player_two_pointers_made: 'Two-Pointers Made',
+  player_offensive_rebounds: 'Offensive Rebounds',
+  player_defensive_rebounds: 'Defensive Rebounds',
+  player_free_throws_attempted: 'Free Throws Attempted',
+  player_free_throws_made: 'Free Throws Made'
 };
 
 function canonicalPropMarketKey(marketKey) {
@@ -218,8 +272,20 @@ function canonicalPropMarketKey(marketKey) {
     player_pitcher_outs: 'player_outs',
     player_outs_recorded: 'player_outs',
     player_pitching_outs: 'player_outs',
+    player_total_outs: 'player_outs',
     pitcher_strikeouts: 'player_strikeouts',
     player_pitcher_strikeouts: 'player_strikeouts',
+    player_strikeouts_alt: 'player_strikeouts',
+    player_hitter_strikeouts: 'player_strikeouts',
+    player_hits_alt: 'player_hits',
+    player_total_bases_alt: 'player_total_bases',
+    player_runs_alt: 'player_runs',
+    player_home_runs_alt: 'player_home_runs',
+    player_stolen_bases_alt: 'player_stolen_bases',
+    player_batter_walks: 'player_walks',
+    player_runs_batted_in: 'player_rbis',
+    player_hits_runs_runs_batted_in: 'player_hits_runs_rbis',
+    player_pitching_walks: 'player_walks_allowed',
     player_three_pointers_made: 'player_threes',
     player_points_rebounds: 'player_pts_rebs',
     player_points_assists: 'player_pts_asts',
@@ -1089,7 +1155,7 @@ function normalizePropRow(row, sport, debug, meta = {}) {
     noteSkip(debug, `prop_unsupported_market_${marketKey || 'missing'}`);
     return null;
   }
-  if (/_alt\b|milestone|fantasy|1st_|4th_|anytime|first|moneyline/i.test(marketKey)) {
+  if (/milestone|fantasy|1st_|4th_|anytime|first|moneyline/i.test(marketKey)) {
     noteSkip(debug, `prop_unsafe_market_${marketKey}`);
     return null;
   }
