@@ -103,6 +103,7 @@ const TRUSTED_LIVE_BOOK_KEYS = [
 ];
 const TRUSTED_LIVE_BOOK_SET = new Set(TRUSTED_LIVE_BOOK_KEYS);
 const MAX_LAST_UPDATE_AGE_SECONDS = Number(process.env.PARLAY_MAX_LAST_UPDATE_AGE_SECONDS || 300);
+const MAX_PROP_LAST_UPDATE_AGE_SECONDS = Number(process.env.PARLAY_MAX_PROP_LAST_UPDATE_AGE_SECONDS || 1800);
 const CALL_TIMEOUT_MS = Number(process.env.PARLAY_CALL_TIMEOUT_MS || 9000);
 
 const EXCHANGE_TITLES = {
@@ -399,6 +400,12 @@ function staleLiveOddsTimestamp(platform, lastUpdate, meta) {
   return staleLiveOddsAge(platform, age);
 }
 
+function stalePropOddsTimestamp(platform, lastUpdate, meta) {
+  if (!staleLiveOddsPlatform(platform)) return false;
+  const age = lastUpdateAgeSecondsFromValue(lastUpdate, meta?.fetchTimestamp);
+  return age != null && age > MAX_PROP_LAST_UPDATE_AGE_SECONDS;
+}
+
 function unsupportedMainLine(sport, marketType, line) {
   const shortSport = sportShort(sport);
   const n = Number(line);
@@ -592,7 +599,9 @@ function comparisonMarketKey(m) {
     comparisonGameKey(m),
     m.marketType,
     m.marketType === 'spread' ? String(m.favoredTeamName || '').toLowerCase() : '',
-    m.line == null ? '' : String(m.line)
+    m.line == null ? '' : String(m.line),
+    m.marketType === 'prop' ? String(m.player || '').toLowerCase() : '',
+    m.marketType === 'prop' ? String(m.statType || '').toLowerCase() : ''
   ].join('|');
 }
 
@@ -1160,7 +1169,7 @@ function normalizePropRow(row, sport, debug, meta = {}) {
     noteSkip(debug, 'prop_missing_required_fields');
     return null;
   }
-  if (staleLiveOddsTimestamp(platform, row.last_update, meta)) {
+  if (stalePropOddsTimestamp(platform, row.last_update, meta)) {
     noteSkip(debug, `prop_stale_book_skipped_${platform}`);
     return null;
   }
@@ -1724,6 +1733,7 @@ module.exports = async function handler(req, res) {
       trustedLiveBookKeys: TRUSTED_LIVE_BOOK_KEYS,
       auditOnlyBookKeys: AUDIT_ONLY_BOOK_KEYS,
       maxLastUpdateAgeSeconds: MAX_LAST_UPDATE_AGE_SECONDS,
+      maxPropLastUpdateAgeSeconds: MAX_PROP_LAST_UPDATE_AGE_SECONDS,
       exchangesSeen,
       countsByBook,
       countsBySport,
