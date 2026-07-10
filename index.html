@@ -1905,8 +1905,8 @@ async function fetchParlay({ forceFresh = false, includeProps = false } = {}) {
     try { return normalizeRaw(JSON.parse(cached), { fromCache: true }); } catch (_) {}
   }
 
-  const qs = includeProps ? '?props=1' : '';
-  const freshQs = includeProps ? '?fresh=1&props=1' : '?fresh=1';
+  const qs = '?props=1';
+  const freshQs = '?fresh=1&props=1';
   const data = forceFresh ? await fetchRaw('/api/parlay' + freshQs) : await fetchCachedRaw('/api/parlay' + qs);
   const raw = data.markets || (Array.isArray(data) ? data : []);
   localStorage.setItem(cacheKey, JSON.stringify(raw));
@@ -2885,7 +2885,7 @@ function App() {
   const [marketFilter, setMarketFilter] = useState('all');
   const [todayOnly, setTodayOnly] = useState(false);
   const [includeProps, setIncludeProps] = useState(() => {
-    const defaultVersion = 'safe-props-v2';
+    const defaultVersion = 'safe-props-v3';
     if (localStorage.getItem('includePropsDefaultVersion') !== defaultVersion) {
       localStorage.setItem('includePropsDefaultVersion', defaultVersion);
       localStorage.setItem('includeProps', '1');
@@ -3062,7 +3062,7 @@ function App() {
     try {
       setParlayLoading(true);
       setStatus(prev => ({ ...prev, parlay:'loading' }));
-      const pendingParlay = fetchParlay({ forceFresh: true, includeProps });
+      const pendingParlay = fetchParlay({ forceFresh: true, includeProps: true });
       pendingParlay.catch(() => {});
       const coreMarkets = await refresh();
       await pullParlay(coreMarkets, pendingParlay);
@@ -3181,12 +3181,16 @@ function App() {
       {!firstLoad && (
         <div className="stats-bar">
           <div className="stat">
-            <div className="stat-val" style={{color: displayArbs.length > 0 ? 'var(--green)' : 'var(--dim)'}}>{displayArbs.length}</div>
-            <div className="stat-lbl">Live Arbs</div>
+            <div className="stat-val" style={{color: arbs.length > 0 ? 'var(--green)' : 'var(--dim)'}}>
+              {displayArbs.length}{hiddenLiveArbs > 0 ? <span style={{fontSize:'0.58em', color:'var(--dim)'}}>/{arbs.length}</span> : null}
+            </div>
+            <div className="stat-lbl">Live Arbs {hiddenLiveArbs > 0 ? 'visible/total' : ''}</div>
           </div>
           <div className="stat">
-            <div className="stat-val" style={{color: displayNear.length > 0 ? 'var(--yellow)' : 'var(--dim)'}}>{displayNear.length}</div>
-            <div className="stat-lbl">Near-Arbs</div>
+            <div className="stat-val" style={{color: near.length > 0 ? 'var(--yellow)' : 'var(--dim)'}}>
+              {displayNear.length}{hiddenNearArbs > 0 ? <span style={{fontSize:'0.58em', color:'var(--dim)'}}>/{near.length}</span> : null}
+            </div>
+            <div className="stat-lbl">Near-Arbs {hiddenNearArbs > 0 ? 'visible/total' : ''}</div>
           </div>
           <div className="stat">
             <div className="stat-val" style={{color: bestM > 0 ? 'var(--green)' : 'var(--dim)'}}>{bestM != null ? fmtPct(bestM) : '—'}</div>
@@ -3232,17 +3236,9 @@ function App() {
             {MARKET_FILTER_LB[f]}
           </button>
         ))}
-        <div className="near-toggle" onClick={() => setIncludeProps(v => {
-          const next = !v;
-          if (next) {
-            setMarketFilter('props');
-            setShowNear(true);
-            setNearOpen(true);
-          }
-          return next;
-        })} title="Adds player props from ParlayAPI on the next Refresh Odds click">
-          <div className={`tswitch${includeProps?' on':''}`}><div className="tknob"/></div>
-          Include player props <span style={{color:'var(--dimmer)'}}>+6 credits on refresh</span>
+        <div className="near-toggle" title="Player props are included on every Refresh Odds click">
+          <div className="tswitch on"><div className="tknob"/></div>
+          Player props included <span style={{color:'var(--dimmer)'}}>+6 credits on refresh</span>
         </div>
       </div>
 
