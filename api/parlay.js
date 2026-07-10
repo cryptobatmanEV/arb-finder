@@ -370,16 +370,33 @@ function isTrustedLiveBook(platform) {
 
 function lastUpdateAgeSeconds(book, market, fetchTimestamp) {
   const lastUpdate = book?.last_update || market?.last_update || null;
+  return lastUpdateAgeSecondsFromValue(lastUpdate, fetchTimestamp);
+}
+
+function lastUpdateAgeSecondsFromValue(lastUpdate, fetchTimestamp) {
   const fetchMs = new Date(fetchTimestamp || '').getTime();
   const updateMs = new Date(lastUpdate || '').getTime();
   if (!Number.isFinite(fetchMs) || !Number.isFinite(updateMs)) return null;
   return Math.max(0, Math.round((fetchMs - updateMs) / 1000));
 }
 
-function staleSportsbookRow(platform, book, market, meta) {
-  if (!SPORTSBOOK_BOOK_SET.has(platform)) return false;
+function staleLiveOddsPlatform(platform) {
+  return SPORTSBOOK_BOOK_SET.has(platform) || !!EXCHANGE_TITLES[platform];
+}
+
+function staleLiveOddsAge(platform, age) {
+  return staleLiveOddsPlatform(platform) && age != null && age > MAX_LAST_UPDATE_AGE_SECONDS;
+}
+
+function staleLiveOddsRow(platform, book, market, meta) {
+  if (!staleLiveOddsPlatform(platform)) return false;
   const age = lastUpdateAgeSeconds(book, market, meta?.fetchTimestamp);
-  return age != null && age > MAX_LAST_UPDATE_AGE_SECONDS;
+  return staleLiveOddsAge(platform, age);
+}
+
+function staleLiveOddsTimestamp(platform, lastUpdate, meta) {
+  const age = lastUpdateAgeSecondsFromValue(lastUpdate, meta?.fetchTimestamp);
+  return staleLiveOddsAge(platform, age);
 }
 
 function unsupportedMainLine(sport, marketType, line) {
@@ -760,8 +777,9 @@ function normalizeEvent(ev, sport, debug, meta = {}) {
       const key = market.key;
       const outcomes = market.outcomes || [];
 
-      if (staleSportsbookRow(platform, book, market, meta)) {
-        noteSkip(debug, `stale_book_included_${platform}`);
+      if (staleLiveOddsRow(platform, book, market, meta)) {
+        noteSkip(debug, `stale_book_skipped_${platform}`);
+        continue;
       }
 
       if (key === 'h2h') {
@@ -1142,6 +1160,10 @@ function normalizePropRow(row, sport, debug, meta = {}) {
     noteSkip(debug, 'prop_missing_required_fields');
     return null;
   }
+  if (staleLiveOddsTimestamp(platform, row.last_update, meta)) {
+    noteSkip(debug, `prop_stale_book_skipped_${platform}`);
+    return null;
+  }
   if (REMOVED_BOOK_SET.has(platform)) {
     noteSkip(debug, `excluded_book_${platform}`);
     return null;
@@ -1169,6 +1191,7 @@ function normalizePropRow(row, sport, debug, meta = {}) {
 
   const canonicalMarketKey = canonicalPropMarketKey(marketKey);
   const label = PROP_MARKET_LABELS[canonicalMarketKey] || PROP_MARKET_LABELS[marketKey] || canonicalMarketKey.replace(/^player_/, '').replace(/_/g, ' ');
+  const lastUpdateAgeSeconds = lastUpdateAgeSecondsFromValue(row.last_update, meta?.fetchTimestamp);
   return {
     id: `${row.event_id || row.id || `${away}-${home}-${startTime}`}-${platform}-${marketKey}-${player}-${line}`,
     source: 'parlay',
@@ -1201,6 +1224,7 @@ function normalizePropRow(row, sport, debug, meta = {}) {
         rawCommenceTime: startTime,
         displayedDate: String(startTime || '').slice(0, 10),
         lastUpdate: row.last_update || null,
+        lastUpdateAgeSeconds,
         fetchTimestamp: meta?.fetchTimestamp || null,
         cacheStatus: 'fresh',
         rawHomeTeam: home,
@@ -1221,6 +1245,7 @@ function normalizePropRow(row, sport, debug, meta = {}) {
         rawCommenceTime: startTime,
         displayedDate: String(startTime || '').slice(0, 10),
         lastUpdate: row.last_update || null,
+        lastUpdateAgeSeconds,
         fetchTimestamp: meta?.fetchTimestamp || null,
         cacheStatus: 'fresh',
         rawHomeTeam: home,

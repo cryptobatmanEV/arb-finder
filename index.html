@@ -2320,6 +2320,56 @@ function boardRowsToOpportunities(boardRows) {
   return { opportunities: opportunities.sort((a, b) => b.margin - a.margin), skipped };
 }
 
+function opportunityForEnabledBooks(opp, enabledBooks) {
+  if (!opp) return null;
+  if (!enabledBooks || enabledBooks.length === ALL_BOOK_FILTERS.length) return opp;
+  const enabled = new Set(enabledBooks);
+  const sideA = (opp.sideBoards?.legA?.length ? opp.sideBoards.legA : [opp.legA])
+    .filter(book => book && enabled.has(book.platform));
+  const sideB = (opp.sideBoards?.legB?.length ? opp.sideBoards.legB : [opp.legB])
+    .filter(book => book && enabled.has(book.platform));
+  const best = bestBoardPair(sideA, sideB);
+  if (!best) return null;
+
+  const margin = (1 - best.sum) * 100;
+  const isArb = margin > 0;
+  const isNear = !isArb && margin > -(NEAR_ARB_BAND * 100);
+  if (!isArb && !isNear) return null;
+
+  const denom = best.sum;
+  const stakeA = BASE_STAKE * best.a.price / denom;
+  const stakeB = BASE_STAKE * best.b.price / denom;
+  const decorate = (books, mainLeg) => books
+    .map(book => ({
+      ...book,
+      relation: relationToMain(book.price, mainLeg.price, book.platform, mainLeg.platform)
+    }))
+    .sort((a, b) => a.price - b.price || a.platform.localeCompare(b.platform));
+
+  return {
+    ...opp,
+    legA: { ...best.a, stake: stakeA },
+    legB: { ...best.b, stake: stakeB },
+    margin,
+    impliedSum: best.sum * 100,
+    profit: isArb ? BASE_STAKE * (1 / denom - 1) : 0,
+    roi: isArb ? (1 / denom - 1) * 100 : 0,
+    isArb,
+    isNear,
+    groupedCount: sideA.length * sideB.length,
+    sideBoards: {
+      legA: decorate(sideA, best.a),
+      legB: decorate(sideB, best.b)
+    },
+    matchValidation: {
+      ...(opp.matchValidation || {}),
+      bookFilterApplied: true,
+      legA: { ...(opp.matchValidation?.legA || {}), platform: best.a.platform, side: best.a.rawTitle || best.a.label },
+      legB: { ...(opp.matchValidation?.legB || {}), platform: best.b.platform, side: best.b.rawTitle || best.b.label }
+    }
+  };
+}
+
 function groupOpportunities(opps, allMarkets = []) {
   const groups = new Map();
   (opps || []).forEach(opp => {
@@ -3029,13 +3079,7 @@ function App() {
     return () => clearInterval(id);
   }, [refresh]);
 
-  const visibleByBooks = (o) => {
-    if (enabledBooks.length === ALL_BOOK_FILTERS.length) return true;
-    const enabled = new Set(enabledBooks);
-    const sideA = (o.sideBoards?.legA?.length ? o.sideBoards.legA : [o.legA]).filter(Boolean);
-    const sideB = (o.sideBoards?.legB?.length ? o.sideBoards.legB : [o.legB]).filter(Boolean);
-    return sideA.some(a => enabled.has(a.platform) && sideB.some(b => enabled.has(b.platform) && a.platform !== b.platform));
-  };
+  const applyBookFilter = (o) => opportunityForEnabledBooks(o, enabledBooks);
   const visibleByDate = (o) => !todayOnly || o.gameDate === appLocalDate(new Date().toISOString());
   const coreSet = new Set(CORE_PLATFORMS);
   const sportsbookSet = new Set(SPORTSBOOK_PLATFORMS);
@@ -3063,9 +3107,17 @@ function App() {
     if (['moneyline','spread','total'].includes(marketFilter)) return o.marketType === marketFilter;
     return true;
   };
-  const visibleOpp = (o) => visibleByBooks(o) && visibleBySource(o) && visibleByMarket(o) && visibleByDate(o);
-  const fArbs = (filter === 'all' ? arbs : arbs.filter(a => a.sport === filter)).filter(visibleOpp);
-  const fNear = (filter === 'all' ? near : near.filter(a => a.sport === filter)).filter(visibleOpp);
+  const visibleOpp = (o) => visibleBySource(o) && visibleByMarket(o) && visibleByDate(o);
+  const fArbs = (filter === 'all' ? arbs : arbs.filter(a => a.sport === filter))
+    .map(applyBookFilter)
+    .filter(Boolean)
+    .filter(visibleOpp)
+    .filter(opp => opp.isArb);
+  const fNear = (filter === 'all' ? near : near.filter(a => a.sport === filter))
+    .map(applyBookFilter)
+    .filter(Boolean)
+    .filter(visibleOpp)
+    .filter(opp => opp.isNear);
   const displayArbs = fArbs;
   const displayNear = fNear;
   const shownOpps = [...displayArbs, ...displayNear];
